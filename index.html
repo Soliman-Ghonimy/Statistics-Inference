@@ -50,7 +50,7 @@
           if (k < 0 || k > n) return 0; if (k === 0 || k === n) return 1;
           let c = 1; for (let i = 1; i <= k; i++) c = (c * (n - i + 1)) / i; return c;
         };
-        const fmt = (v) => (isNaN(v) || v === null || v === undefined) ? 'N/A' : parseFloat(Number(v).toFixed(4)).toString();
+        const fmt = (v) => (isNaN(v) || v === null || v === undefined || v === '') ? 'N/A' : parseFloat(Number(v).toFixed(4)).toString();
 
         // --- Continuous PDFs ---
         const normalPDF = (x, mu, sigma) => (1 / (sigma * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * Math.pow((x - mu) / sigma, 2));
@@ -114,7 +114,7 @@
         const getZScore = (ci) => ci === 0.90 ? 1.645 : ci === 0.95 ? 1.960 : ci === 0.99 ? 2.576 : 1.96;
         const getTCrit = (ci, df) => {
           const z = getZScore(ci);
-          return df > 100 ? z : z * (1 + (z*z + 1)/(4*df));
+          return df > 100 ? z : z * (1 + (z*z + 1)/(4*df)); // Cornish-Fisher approx
         };
 
         // --- Encyclopedia (English) ---
@@ -151,180 +151,8 @@
         };
         const TYPE_LABELS = { normal: 'Normal', beta: 'Beta', gamma: 'Gamma', exponential: 'Exponential', uniform: 'Uniform', laplace: 'Laplace', cauchy: 'Cauchy', lognormal: 'Log-Normal', weibull: 'Weibull', pareto: 'Pareto', logistic: 'Logistic', rayleigh: 'Rayleigh', binomial: 'Binomial', poisson: 'Poisson', bernoulli: 'Bernoulli', geometric: 'Geometric', negative_binomial: 'Neg Binomial', hypergeometric: 'Hypergeometric', discrete_uniform: 'Disc Uniform', student_t: "Student's t", f_dist: 'F-Dist', chisquare: 'Chi-Square' };
 
-        function App() {
-          const [activeTab, setActiveTab] = useState('explorer');
-          const [infoModal, setInfoModal] = useState(null);
-          
-          // --- States ---
-          const [xAxisBounds, setXAxisBounds] = useState({ min: -5, max: 10 });
-          const [yAxisConfig, setYAxisConfig] = useState({ show: true, auto: true, min: 0, max: 1 });
-          const bayesYAxisConfig = { show: true, auto: true };
-          
-          const [distributions, setDistributions] = useState([
-            { id: 1, type: 'normal', color: '#3b82f6', params: { mu: 0, sigma: 1 }, name: 'Normal 1' },
-            { id: 2, type: 'poisson', color: '#ec4899', params: { lambda: 4 }, name: 'Poisson 2' }
-          ]);
-
-          const [bayesState, setBayesState] = useState({
-            type: 'beta-binomial', prior1: 2, prior2: 2, data1: 10, data2: 7, data3: 1, testPoint: 0.5, ciLevel: 0.95
-          });
-
-          const [inferenceSamples, setInferenceSamples] = useState([
-            { id: 1, name: 'Sample A', size: 50, type: 'normal', params: { mu: 100, sigma: 15 }, data: [], color: '#8b5cf6' },
-            { id: 2, name: 'Sample B', size: 50, type: 'normal', params: { mu: 105, sigma: 15 }, data: [], color: '#ec4899' },
-            { id: 3, name: 'Sample C', size: 50, type: 'normal', params: { mu: 110, sigma: 15 }, data: [], color: '#10b981' }
-          ]);
-          const [testConfig, setTestConfig] = useState({
-            testType: 'anova', target1: 1, target2: 2, anovaTargets: [1, 2, 3],
-            hypoMean: 100, knownVar1: 15, knownVar2: 15, tails: 'two', ciLevel: 0.95
-          });
-
-          // --- Handlers ---
-          const addDistribution = () => {
-            if (distributions.length >= 6) return;
-            const newId = distributions.length > 0 ? Math.max(...distributions.map(d => d.id)) + 1 : 1;
-            const colors = ['#f59e0b', '#10b981', '#8b5cf6', '#ef4444', '#06b6d4', '#f472b6'];
-            setDistributions([...distributions, { id: newId, type: 'normal', color: colors[newId % colors.length], params: { mu: 0, sigma: 1 }, name: `Normal ${newId}` }]);
-          };
-          const removeDistribution = (id) => setDistributions(distributions.filter(d => d.id !== id));
-          const updateDistType = (id, newType) => {
-            setDistributions(distributions.map(d => {
-              if (d.id === id) {
-                let p = {};
-                switch (newType) {
-                  case 'normal': p = { mu: 0, sigma: 1 }; break;
-                  case 'beta': case 'gamma': p = { alpha: 2, beta: 2 }; break;
-                  case 'exponential': p = { lambda: 1 }; break;
-                  case 'uniform': p = { a: -2, b: 2 }; break;
-                  case 'laplace': p = { mu: 0, b: 1 }; break;
-                  case 'cauchy': p = { x0: 0, gammaVal: 1 }; break;
-                  case 'lognormal': p = { mu: 0, sigma: 1 }; break;
-                  case 'weibull': p = { k: 1.5, lambda: 1 }; break;
-                  case 'pareto': p = { xm: 1, alpha: 3 }; break;
-                  case 'logistic': p = { mu: 0, s: 1 }; break;
-                  case 'rayleigh': p = { sigma: 1 }; break;
-                  case 'binomial': p = { n: 10, p: 0.5 }; break;
-                  case 'poisson': p = { lambda: 4 }; break;
-                  case 'bernoulli': case 'geometric': p = { p: 0.5 }; break;
-                  case 'negative_binomial': p = { r: 3, p: 0.5 }; break;
-                  case 'hypergeometric': p = { N: 50, K: 10, n: 10 }; break;
-                  case 'discrete_uniform': p = { a: 1, b: 6 }; break;
-                  case 'student_t': p = { nu: 5 }; break;
-                  case 'f_dist': p = { d1: 5, d2: 5 }; break;
-                  case 'chisquare': p = { k: 5 }; break;
-                  default: p = { mu: 0, sigma: 1 };
-                }
-                return { ...d, type: newType, params: p, name: `${TYPE_LABELS[newType] || newType} ${id}` };
-              }
-              return d;
-            }));
-          };
-          const updateDistParam = (id, paramName, value) => setDistributions(distributions.map(d => d.id === id ? { ...d, params: { ...d.params, [paramName]: parseFloat(value) || 0 } } : d));
-
-          const updateBayesState = (key, value) => {
-            setBayesState(prev => {
-              const newState = { ...prev, [key]: value };
-              if (key === 'data1' && ['beta-binomial', 'jeffreys-binomial'].includes(prev.type) && newState.data2 > value) newState.data2 = value;
-              return newState;
-            });
-          };
-          const switchBayesCase = (newType) => {
-            switch (newType) {
-              case 'beta-binomial': setBayesState(p => ({ ...p, type: newType, prior1: 2, prior2: 2, data1: 10, data2: 7, testPoint: 0.5 })); break;
-              case 'gamma-poisson': setBayesState(p => ({ ...p, type: newType, prior1: 2, prior2: 1, data1: 5, data2: 15, testPoint: 3 })); break;
-              case 'gamma-exponential': setBayesState(p => ({ ...p, type: newType, prior1: 2, prior2: 1, data1: 5, data2: 10, testPoint: 0.5 })); break;
-              case 'normal-normal': setBayesState(p => ({ ...p, type: newType, prior1: 0, prior2: 2, data1: 5, data2: 2, data3: 1.5, testPoint: 1 })); break;
-              case 'jeffreys-binomial': setBayesState(p => ({ ...p, type: newType, prior1: 0.5, prior2: 0.5, data1: 10, data2: 7, testPoint: 0.5 })); break;
-              default: break;
-            }
-          };
-
-          const addInferenceSample = () => {
-            const newId = inferenceSamples.length > 0 ? Math.max(...inferenceSamples.map(s => s.id)) + 1 : 1;
-            const colors = ['#8b5cf6', '#ec4899', '#10b981', '#f59e0b', '#3b82f6', '#ef4444'];
-            setInferenceSamples([...inferenceSamples, { id: newId, name: `Sample ${newId}`, size: 30, type: 'normal', params: { mu: 50, sigma: 10 }, data: [], color: colors[newId % colors.length] }]);
-          };
-          const removeInferenceSample = (id) => {
-            setInferenceSamples(inferenceSamples.filter(s => s.id !== id));
-            setTestConfig(prev => ({ ...prev, anovaTargets: prev.anovaTargets.filter(tid => tid !== id), target1: prev.target1 == id ? '' : prev.target1, target2: prev.target2 == id ? '' : prev.target2 }));
-          };
-          const updateSampleType = (id, newType) => {
-            setInferenceSamples(inferenceSamples.map(s => {
-              if (s.id === id) {
-                let p = {};
-                if (newType === 'normal') p = { mu: 50, sigma: 10 }; else if (newType === 'uniform') p = { a: 0, b: 100 }; else if (newType === 'exponential') p = { lambda: 0.1 }; else if (newType === 'poisson') p = { lambda: 20 }; else if (newType === 'binomial') p = { n: 1, p: 0.5 };
-                return { ...s, type: newType, params: p, data: [] };
-              }
-              return s;
-            }));
-          };
-          const updateSampleParam = (id, key, val) => setInferenceSamples(inferenceSamples.map(s => s.id === id ? { ...s, params: { ...s.params, [key]: parseFloat(val) || 0 } } : s));
-
-          const generateDataForSamples = () => {
-            setInferenceSamples(prev => prev.map(samp => {
-              let newData = [];
-              for (let i = 0; i < samp.size; i++) {
-                if (samp.type === 'normal') {
-                  let u = 0, v = 0; while (u === 0) u = Math.random(); while (v === 0) v = Math.random();
-                  let z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-                  newData.push(z * samp.params.sigma + samp.params.mu);
-                } else if (samp.type === 'uniform') newData.push(Math.random() * (samp.params.b - samp.params.a) + samp.params.a);
-                else if (samp.type === 'exponential') newData.push(-Math.log(1 - Math.random()) / samp.params.lambda);
-                else if (samp.type === 'poisson') { let L = Math.exp(-samp.params.lambda), k = 0, p = 1; do { k++; p *= Math.random(); } while (p > L); newData.push(k - 1); }
-                else if (samp.type === 'binomial') { let succ = 0; for (let j = 0; j < samp.params.n; j++) if (Math.random() < samp.params.p) succ++; newData.push(succ); }
-              }
-              return { ...samp, data: newData };
-            }));
-          };
-
-          useEffect(() => { if (inferenceSamples[0].data.length === 0) generateDataForSamples(); }, []);
-
-          // --- Scatter Plot (Horizontal Overlapping Jitter) ---
-          const scatterPlotData = useMemo(() => {
-            let allData = inferenceSamples.flatMap(s => s.data);
-            if (allData.length === 0) return null;
-            let minVal = Math.min(...allData), maxVal = Math.max(...allData);
-            const range = maxVal - minVal || 1; minVal -= range * 0.1; maxVal += range * 0.1;
-            const points = inferenceSamples.flatMap(samp => samp.data.map(val => ({ val, jitter: (Math.random() - 0.5) * 0.8, color: samp.color, name: samp.name })));
-            return { points, minVal, maxVal };
-          }, [inferenceSamples]);
-
-          const ScatterPlot = () => {
-            if (!scatterPlotData) return <div className="text-center text-gray-600 mt-10">Generate data to visualize</div>;
-            const width = 800, height = 250, paddingX = 60, paddingY = 40;
-            const innerWidth = width - paddingX * 2, innerHeight = height - paddingY * 2;
-            const scaleX = (val) => paddingX + ((val - scatterPlotData.minVal) / (scatterPlotData.maxVal - scatterPlotData.minVal)) * innerWidth;
-            const scaleY = (jitter) => paddingY + (jitter + 0.5) * innerHeight;
-            const gridLines = Array.from({length: 11}).map((_, i) => {
-                const val = scatterPlotData.minVal + (i / 10) * (scatterPlotData.maxVal - scatterPlotData.minVal);
-                return (
-                    <g key={`x-${i}`}>
-                        <line x1={scaleX(val)} y1={paddingY} x2={scaleX(val)} y2={height - paddingY} stroke="#374151" strokeDasharray="4 4" />
-                        <text x={scaleX(val)} y={height - paddingY + 20} fill="#9ca3af" fontSize="12" textAnchor="middle">{fmt(val)}</text>
-                    </g>
-                );
-            });
-            return (
-              <div className="relative w-full h-full flex items-center justify-center">
-                <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
-                   {gridLines}
-                   <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} stroke="#6b7280" strokeWidth="2" />
-                   {scatterPlotData.points.map((p, i) => <circle key={`pt-${i}`} cx={scaleX(p.val)} cy={scaleY(p.jitter)} r="5" fill={p.color} opacity="0.75" stroke="#1f2937" strokeWidth="1" />)}
-                </svg>
-                <div className="absolute top-2 right-4 flex flex-col gap-2 bg-gray-900/90 p-3 rounded-lg border border-gray-700 shadow-lg backdrop-blur-sm">
-                  {inferenceSamples.map(s => (
-                    <div key={s.id} className="flex items-center gap-2">
-                      <span className="w-3 h-3 rounded-full" style={{backgroundColor: s.color}}></span>
-                      <span className="text-gray-200 text-xs font-bold">{s.name}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          };
-
-          // --- Analytical Engines ---
-          const generateChartData = (domainMin, domainMax, resolution, dists) => {
+        // --- Core Analytic Functions ---
+        const generateChartData = (domainMin, domainMax, resolution, dists) => {
             const data = []; let maxY = 0; const step = (domainMax - domainMin) / resolution;
             dists.forEach(dist => {
               const points = []; const isDiscrete = isDiscreteDist(dist.type) || dist.type === 'likelihood_discrete';
@@ -358,16 +186,316 @@
                                      else if (dist.params.lType === 'poisson') y = Math.pow(x, dist.params.k) * Math.exp(-dist.params.n * x) * dist.params.scale;
                                      else if (dist.params.lType === 'exponential') y = Math.pow(x, dist.params.n) * Math.exp(-x * dist.params.sumX) * dist.params.scale;
                                      else if (dist.params.lType === 'normal') y = normalPDF(x, dist.params.xBar, dist.params.sigma / Math.sqrt(dist.params.n)) * dist.params.scale; break;
-                  default: y = uniformPDF(x, -5, 5);
+                  default: y = 0; break;
                 }
                 if (!isNaN(y) && isFinite(y) && y >= 0) { points.push({ x, y }); if (y > maxY) maxY = y; }
               }
               data.push({ ...dist, points, isDiscrete });
             });
             return { data, maxY: maxY > 0 ? maxY * 1.15 : 1 }; 
+        };
+
+        // --- Architecturally Isolated Components ---
+
+        const Plotter = ({ chartData, domainMin, domainMax, xLabel, yConfig, showCI = false, credibleInterval = null, testPoint = null, testValue = null }) => {
+          const width = 800, height = 400, padding = 50, innerWidth = width - padding * 2, innerHeight = height - padding * 2;
+          const maxY = yConfig.auto ? chartData.maxY : yConfig.max, minY = yConfig.auto ? 0 : yConfig.min;
+          const scaleX = (x) => padding + ((x - domainMin) / (domainMax - domainMin)) * innerWidth;
+          const scaleY = (y) => height - padding - ((y - minY) / (maxY - minY)) * innerHeight;
+
+          const gridLines = [];
+          for (let i = 0; i <= 10; i++) {
+              const xVal = domainMin + (domainMax - domainMin) * (i / 10);
+              gridLines.push(<g key={`grid-x-${i}`}><line x1={scaleX(xVal)} y1={padding} x2={scaleX(xVal)} y2={height - padding} stroke="#374151" /><text x={scaleX(xVal)} y={height - padding + 20} fill="#9ca3af" fontSize="12" textAnchor="middle">{fmt(xVal)}</text></g>);
+          }
+          if (yConfig.show) {
+            for (let i = 0; i <= 5; i++) {
+              const yVal = minY + (maxY - minY) * (i / 5);
+              gridLines.push(<g key={`grid-y-${i}`}><line x1={padding} y1={scaleY(yVal)} x2={width - padding} y2={scaleY(yVal)} stroke="#374151" strokeDasharray="4,4" /><text x={padding - 10} y={scaleY(yVal) + 4} fill="#9ca3af" fontSize="12" textAnchor="end">{fmt(yVal)}</text></g>);
+            }
+          }
+          return (
+            <div className="relative w-full overflow-hidden bg-gray-900 rounded-xl border border-gray-700 shadow-2xl p-4">
+              <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
+                {gridLines}
+                <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#6b7280" strokeWidth="2" />
+                <text x={width / 2} y={height - 5} fill="#d1d5db" fontSize="14" textAnchor="middle">{xLabel}</text>
+                {yConfig.show && <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#6b7280" strokeWidth="2" />}
+                
+                {/* CI Rectangle isolated by props */}
+                {showCI && credibleInterval && ( 
+                    <rect x={scaleX(credibleInterval[0])} y={padding} width={scaleX(credibleInterval[1]) - scaleX(credibleInterval[0])} height={innerHeight} fill="#10b981" opacity="0.1" /> 
+                )}
+                
+                {chartData.data.map((dist, i) => {
+                  if (dist.points.length === 0) return null;
+                  if (dist.isDiscrete) return ( <g key={`discrete-${i}`}>{dist.points.map((p, idx) => (<g key={idx}><line x1={scaleX(p.x)} y1={scaleY(0)} x2={scaleX(p.x)} y2={scaleY(p.y)} stroke={dist.color} strokeWidth="3" strokeDasharray={dist.isDashed ? "5,5" : "none"} opacity={0.8} /><circle cx={scaleX(p.x)} cy={scaleY(p.y)} r="4" fill={dist.color} /></g>))}</g>);
+                  const pathData = dist.points.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${scaleX(p.x)} ${scaleY(Math.max(minY, Math.min(maxY, p.y)))}`).join(' ');
+                  return <path key={`cont-${i}`} d={pathData} fill="none" stroke={dist.color} strokeWidth="3" strokeDasharray={dist.isDashed ? "5,5" : "none"} />;
+                })}
+                
+                {/* Test Point Circle isolated by props */}
+                {showCI && testPoint !== null && testValue !== null && (
+                    <circle cx={scaleX(testPoint)} cy={scaleY(testValue)} r="6" fill="#ef4444" stroke="white" strokeWidth="2" />
+                )}
+              </svg>
+              <div className="absolute top-6 right-6 flex flex-col gap-2 bg-gray-800/90 p-3 rounded-lg border border-gray-700 backdrop-blur-sm">
+                {chartData.data.map((dist, i) => (
+                  <div key={i} className="flex items-center gap-2"><div className="w-4 h-1" style={{ backgroundColor: dist.color, borderBottom: dist.isDashed ? '2px dashed white' : 'none' }}></div><span className="text-gray-200 text-sm font-bold">{dist.name}</span></div>
+                ))}
+              </div>
+            </div>
+          );
+        };
+
+        const ScatterPlot = ({ scatterPlotData, inferenceSamples }) => {
+          if (!scatterPlotData) return <div className="text-center text-gray-600 mt-10">Generate data to visualize</div>;
+          const width = 800, height = 250, paddingX = 60, paddingY = 40;
+          const innerWidth = width - paddingX * 2, innerHeight = height - paddingY * 2;
+          const scaleX = (val) => paddingX + ((val - scatterPlotData.minVal) / (scatterPlotData.maxVal - scatterPlotData.minVal)) * innerWidth;
+          const scaleY = (jitter) => paddingY + (jitter + 0.5) * innerHeight;
+          const gridLines = Array.from({length: 11}).map((_, i) => {
+              const val = scatterPlotData.minVal + (i / 10) * (scatterPlotData.maxVal - scatterPlotData.minVal);
+              return (
+                  <g key={`x-${i}`}>
+                      <line x1={scaleX(val)} y1={paddingY} x2={scaleX(val)} y2={height - paddingY} stroke="#374151" strokeDasharray="4 4" />
+                      <text x={scaleX(val)} y={height - paddingY + 20} fill="#9ca3af" fontSize="12" textAnchor="middle">{fmt(val)}</text>
+                  </g>
+              );
+          });
+          return (
+            <div className="relative w-full h-full flex items-center justify-center">
+              <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
+                 {gridLines}
+                 <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} stroke="#6b7280" strokeWidth="2" />
+                 {scatterPlotData.points.map((p, i) => <circle key={`pt-${i}`} cx={scaleX(p.val)} cy={scaleY(p.jitter)} r="5" fill={p.color} opacity="0.75" stroke="#1f2937" strokeWidth="1" className="transition-all duration-300" />)}
+              </svg>
+              <div className="absolute top-2 right-4 flex flex-col gap-2 bg-gray-900/90 p-3 rounded-lg border border-gray-700 shadow-lg backdrop-blur-sm">
+                {inferenceSamples.map(s => (
+                  <div key={s.id} className="flex items-center gap-2">
+                    <span className="w-3 h-3 rounded-full" style={{backgroundColor: s.color}}></span>
+                    <span className="text-gray-200 text-xs font-bold">{s.name}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        };
+
+        const getEquationTexts = (dist) => {
+          const p = dist.params; let base = null, param = null;
+          switch (dist.type) {
+            case 'normal': base = <>f(x) = (1 / &sigma;&radic;(2&pi;)) e<sup>-&frac12; ((x-&mu;)/&sigma;)&sup2;</sup></>; param = <>f(x) = (1 / {fmt(p.sigma)}&radic;(2&pi;)) e<sup>-&frac12; ((x-{fmt(p.mu)})/{fmt(p.sigma)})&sup2;</sup></>; break;
+            case 'beta': base = <>f(x) = [ x<sup>&alpha;-1</sup> (1-x)<sup>&beta;-1</sup> ] / B(&alpha;, &beta;)</>; param = <>f(x) = [ x<sup>{fmt(p.alpha - 1)}</sup> (1-x)<sup>{fmt(p.beta - 1)}</sup> ] / B({fmt(p.alpha)}, {fmt(p.beta)})</>; break;
+            case 'gamma': base = <>f(x) = &beta;<sup>&alpha;</sup> x<sup>&alpha;-1</sup> e<sup>-&beta;x</sup> / &Gamma;(&alpha;)</>; param = <>f(x) = {fmt(p.beta)}<sup>{fmt(p.alpha)}</sup> x<sup>{fmt(p.alpha - 1)}</sup> e<sup>-{fmt(p.beta)}x</sup> / &Gamma;({fmt(p.alpha)})</>; break;
+            case 'exponential': base = <>f(x) = &lambda; e<sup>-&lambda;x</sup></>; param = <>f(x) = {fmt(p.lambda)} e<sup>-{fmt(p.lambda)}x</sup></>; break;
+            case 'uniform': base = <>f(x) = 1 / (b - a)</>; param = <>f(x) = 1 / ({fmt(p.b)} - {fmt(p.a)}) = {fmt(1 / (p.b - p.a))}</>; break;
+            case 'laplace': base = <>f(x) = (1 / 2b) e<sup>-|x-&mu;|/b</sup></>; param = <>f(x) = (1 / {fmt(2 * p.b)}) e<sup>-|x-{fmt(p.mu)}|/{fmt(p.b)}</sup></>; break;
+            case 'lognormal': base = <>f(x) = (1 / x&sigma;&radic;(2&pi;)) e<sup>-(ln(x)-&mu;)&sup2; / (2&sigma;&sup2;)</sup></>; param = <>f(x) = (1 / x({fmt(p.sigma)})&radic;(2&pi;)) e<sup>-(ln(x)-{fmt(p.mu)})&sup2; / (2({fmt(p.sigma)})&sup2;)</sup></>; break;
+            case 'cauchy': base = <>f(x) = 1 / (&pi;&gamma;[1 + ((x-x₀)/&gamma;)&sup2;])</>; param = <>f(x) = 1 / (&pi;({fmt(p.gammaVal)})[1 + ((x-{fmt(p.x0)})/{fmt(p.gammaVal)})&sup2;])</>; break;
+            case 'weibull': base = <>f(x) = (k/&lambda;) (x/&lambda;)<sup>k-1</sup> e<sup>-(x/&lambda;)<sup>k</sup></sup></>; param = <>f(x) = ({fmt(p.k)}/{fmt(p.lambda)}) (x/{fmt(p.lambda)})<sup>{fmt(p.k - 1)}</sup> e<sup>-(x/{fmt(p.lambda)})<sup>{fmt(p.k)}</sup></sup></>; break;
+            case 'pareto': base = <>f(x) = (&alpha; x<sub>m</sub><sup>&alpha;</sup>) / x<sup>&alpha;+1</sup></>; param = <>f(x) = ({fmt(p.alpha)} &middot; {fmt(p.xm)}<sup>{fmt(p.alpha)}</sup>) / x<sup>{fmt(p.alpha + 1)}</sup></>; break;
+            case 'logistic': base = <>f(x) = e<sup>-(x-&mu;)/s</sup> / (s(1 + e<sup>-(x-&mu;)/s</sup>)&sup2;)</>; param = <>f(x) = e<sup>-(x-{fmt(p.mu)})/{fmt(p.s)}</sup> / ({fmt(p.s)}(1 + e<sup>-(x-{fmt(p.mu)})/{fmt(p.s)}</sup>)&sup2;)</>; break;
+            case 'rayleigh': base = <>f(x) = (x/&sigma;&sup2;) e<sup>-x&sup2;/(2&sigma;&sigma;)</sup></>; param = <>f(x) = (x/{fmt(p.sigma * p.sigma)}) e<sup>-x&sup2;/{fmt(2 * p.sigma * p.sigma)}</sup></>; break;
+            case 'student_t': base = <>f(t) = C &middot; (1 + t&sup2;/&nu;)<sup>-(&nu;+1)/2</sup></>; param = <>f(t) = C &middot; (1 + t&sup2;/{fmt(p.nu)})<sup>-{fmt((p.nu + 1) / 2)}</sup></>; break;
+            case 'f_dist': base = <>f(x) = C &middot; &radic;( (d<sub>1</sub>x)<sup>d<sub>1</sub></sup> d<sub>2</sub><sup>d<sub>2</sub></sup> / (d<sub>1</sub>x + d<sub>2</sub>)<sup>d<sub>1</sub>+d<sub>2</sub></sup> ) / x</>; param = <>f(x) = C &middot; &radic;( ({fmt(p.d1)}x)<sup>{fmt(p.d1)}</sup> {fmt(p.d2)}<sup>{fmt(p.d2)}</sup> / ({fmt(p.d1)}x + {fmt(p.d2)})<sup>{fmt(p.d1 + p.d2)}</sup> ) / x</>; break;
+            case 'chisquare': base = <>f(x) = C &middot; x<sup>k/2 - 1</sup> e<sup>-x/2</sup></>; param = <>f(x) = C &middot; x<sup>{fmt(p.k / 2 - 1)}</sup> e<sup>-x/2</sup></>; break;
+            case 'poisson': base = <>P(X=x) = &lambda;<sup>x</sup> e<sup>-&lambda;</sup> / x!</>; param = <>P(X=x) = {fmt(p.lambda)}<sup>x</sup> e<sup>-{fmt(p.lambda)}</sup> / x!</>; break;
+            case 'binomial': base = <>P(X=x) = C(n, x) p<sup>x</sup> (1-p)<sup>n-x</sup></>; param = <>P(X=x) = C({fmt(p.n)}, x) {fmt(p.p)}<sup>x</sup> {fmt(1 - p.p)}<sup>{fmt(p.n)}-x</sup></>; break;
+            case 'bernoulli': base = <>P(X=x) = p<sup>x</sup> (1-p)<sup>1-x</sup></>; param = <>P(X=x) = {fmt(p.p)}<sup>x</sup> {fmt(1 - p.p)}<sup>1-x</sup></>; break;
+            case 'geometric': base = <>P(X=x) = p(1-p)<sup>x-1</sup></>; param = <>P(X=x) = {fmt(p.p)}({fmt(1 - p.p)})<sup>x-1</sup></>; break;
+            case 'negative_binomial': base = <>P(X=x) = C(x-1, r-1) p<sup>r</sup> (1-p)<sup>x-r</sup></>; param = <>P(X=x) = C(x-1, {fmt(p.r - 1)}) {fmt(p.p)}<sup>{fmt(p.r)}</sup> {fmt(1 - p.p)}<sup>x-{fmt(p.r)}</sup></>; break;
+            case 'hypergeometric': base = <>P(X=x) = [C(K,x) C(N-K, n-x)] / C(N,n)</>; param = <>P(X=x) = [C({fmt(p.K)},x) C({fmt(p.N - p.K)}, {fmt(p.n)}-x)] / C({fmt(p.N)},{fmt(p.n)})</>; break;
+            case 'discrete_uniform': base = <>P(X=x) = 1 / (b - a + 1)</>; param = <>P(X=x) = 1 / ({fmt(p.b)} - {fmt(p.a)} + 1) = {fmt(1 / (p.b - p.a + 1))}</>; break;
+            case 'likelihood':
+            case 'likelihood_discrete':
+              if (p.lType === 'binomial') { base = <>L(p|data) &prop; p<sup>k</sup> (1-p)<sup>n-k</sup></>; param = <>L(p) &prop; p<sup>{fmt(p.k)}</sup> (1-p)<sup>{fmt(p.n - p.k)}</sup></>; } 
+              else if (p.lType === 'poisson') { base = <>L(&lambda;|data) &prop; &lambda;<sup>&Sigma;x</sup> e<sup>-n&lambda;</sup></>; param = <>L(&lambda;) &prop; &lambda;<sup>{fmt(p.k)}</sup> e<sup>-{fmt(p.n)}&lambda;</sup></>; } 
+              else if (p.lType === 'exponential') { base = <>L(&lambda;|data) &prop; &lambda;<sup>n</sup> e<sup>-&lambda;&Sigma;x</sup></>; param = <>L(&lambda;) &prop; &lambda;<sup>{fmt(p.n)}</sup> e<sup>-{fmt(p.sumX)}&lambda;</sup></>; } 
+              else if (p.lType === 'normal') { base = <>L(&mu;|data) &prop; e<sup>-(n/2&sigma;&sup2;) (x̄-&mu;)&sup2;</sup></>; param = <>L(&mu;) &prop; e<sup>-({fmt(p.n)} / 2({fmt(p.sigma)})&sup2;) ({fmt(p.xBar)} - &mu;)&sup2;</sup></>; } break;
+            default: base = <>Equation not available</>; param = <>N/A</>;
+          }
+          return { base, param };
+        };
+
+        const EquationsTable = ({ distsToRender }) => {
+          if (!distsToRender || distsToRender.length === 0) return null;
+          return (
+            <div className="mt-8 bg-gray-900 rounded-xl border border-gray-800 shadow-xl overflow-hidden">
+              <div className="bg-gray-800 p-4 border-b border-gray-700"><h2 className="text-xl font-bold text-blue-400">Mathematical Equations</h2></div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm text-gray-300">
+                  <thead className="bg-gray-800/50 text-gray-400"><tr><th className="p-4 font-semibold w-1/4">Distribution</th><th className="p-4 font-semibold w-1/3">Base Equation</th><th className="p-4 font-semibold">Parameterized Equation</th></tr></thead>
+                  <tbody className="divide-y divide-gray-800">
+                    {distsToRender.map((dist, idx) => {
+                      const { base, param } = getEquationTexts(dist);
+                      return (<tr key={idx} className="hover:bg-gray-800/20"><td className="p-4 flex items-center gap-2"><span className="w-3 h-3 rounded-full flex-shrink-0" style={{backgroundColor: dist.color}}></span><span>{dist.name}</span></td><td className="p-4 font-serif text-base md:text-lg text-pink-300">{base}</td><td className="p-4 font-serif text-base md:text-lg text-emerald-300">{param}</td></tr>);
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        };
+
+        // --- Main Application ---
+        function App() {
+          const [activeTab, setActiveTab] = useState('explorer');
+          const [infoModal, setInfoModal] = useState(null);
+          
+          // --- States ---
+          const [xAxisBounds, setXAxisBounds] = useState({ min: -5, max: 10 });
+          const [yAxisConfig, setYAxisConfig] = useState({ show: true, auto: true, min: 0, max: 1 });
+          const [bayesYAxisConfig, setBayesYAxisConfig] = useState({ show: true, auto: true, max: 1 });
+          
+          const [distributions, setDistributions] = useState([
+            { id: 1, type: 'normal', color: '#3b82f6', params: { mu: 0, sigma: 1 }, name: 'Normal 1' },
+            { id: 2, type: 'poisson', color: '#ec4899', params: { lambda: 4 }, name: 'Poisson 2' }
+          ]);
+
+          const [bayesState, setBayesState] = useState({
+            type: 'beta-binomial', prior1: 2, prior2: 2, data1: 10, data2: 7, data3: 1, testPoint: 0.5, ciLevel: 0.95
+          });
+
+          const [inferenceSamples, setInferenceSamples] = useState([
+            { id: 1, name: 'Sample A', size: 50, type: 'normal', params: { mu: 100, sigma: 15 }, data: [], color: '#8b5cf6' },
+            { id: 2, name: 'Sample B', size: 50, type: 'normal', params: { mu: 105, sigma: 15 }, data: [], color: '#ec4899' },
+            { id: 3, name: 'Sample C', size: 50, type: 'normal', params: { mu: 110, sigma: 15 }, data: [], color: '#10b981' }
+          ]);
+          
+          const [testConfig, setTestConfig] = useState({
+            testType: 'anova', target1: 1, target2: 2, anovaTargets: [1, 2, 3],
+            hypoMean: 100, knownVar1: 15, knownVar2: 15, tails: 'two', ciLevel: 0.95
+          });
+
+          // --- Handlers ---
+          const addDistribution = () => {
+            if (distributions.length >= 6) return;
+            const newId = distributions.length > 0 ? Math.max(...distributions.map(d => d.id)) + 1 : 1;
+            const colors = ['#f59e0b', '#10b981', '#8b5cf6', '#ef4444', '#06b6d4', '#f472b6'];
+            setDistributions([...distributions, { id: newId, type: 'normal', color: colors[newId % colors.length], params: { mu: 0, sigma: 1 }, name: `Normal ${newId}` }]);
+          };
+          
+          const removeDistribution = (id) => setDistributions(distributions.filter(d => d.id !== id));
+          
+          const updateDistType = (id, newType) => {
+            setDistributions(distributions.map(d => {
+              if (d.id === id) {
+                let p = {};
+                switch (newType) {
+                  case 'normal': p = { mu: 0, sigma: 1 }; break;
+                  case 'beta': case 'gamma': p = { alpha: 2, beta: 2 }; break;
+                  case 'exponential': p = { lambda: 1 }; break;
+                  case 'uniform': p = { a: -2, b: 2 }; break;
+                  case 'laplace': p = { mu: 0, b: 1 }; break;
+                  case 'cauchy': p = { x0: 0, gammaVal: 1 }; break;
+                  case 'lognormal': p = { mu: 0, sigma: 1 }; break;
+                  case 'weibull': p = { k: 1.5, lambda: 1 }; break;
+                  case 'pareto': p = { xm: 1, alpha: 3 }; break;
+                  case 'logistic': p = { mu: 0, s: 1 }; break;
+                  case 'rayleigh': p = { sigma: 1 }; break;
+                  case 'binomial': p = { n: 10, p: 0.5 }; break;
+                  case 'poisson': p = { lambda: 4 }; break;
+                  case 'bernoulli': case 'geometric': p = { p: 0.5 }; break;
+                  case 'negative_binomial': p = { r: 3, p: 0.5 }; break;
+                  case 'hypergeometric': p = { N: 50, K: 10, n: 10 }; break;
+                  case 'discrete_uniform': p = { a: 1, b: 6 }; break;
+                  case 'student_t': p = { nu: 5 }; break;
+                  case 'f_dist': p = { d1: 5, d2: 5 }; break;
+                  case 'chisquare': p = { k: 5 }; break;
+                  default: p = { mu: 0, sigma: 1 };
+                }
+                return { ...d, type: newType, params: p, name: `${TYPE_LABELS[newType] || newType} ${id}` };
+              }
+              return d;
+            }));
+          };
+          
+          const updateDistParam = (id, paramName, value) => {
+            const parsedValue = value === '' ? '' : parseFloat(value);
+            setDistributions(distributions.map(d => d.id === id ? { ...d, params: { ...d.params, [paramName]: isNaN(parsedValue) && parsedValue !== '' ? 0 : parsedValue } } : d));
           };
 
-          const explorerData = useMemo(() => generateChartData(xAxisBounds.min, xAxisBounds.max, 400, distributions), [distributions, xAxisBounds]);
+          const updateBayesState = (key, value) => {
+            const parsedValue = value === '' ? '' : parseFloat(value);
+            setBayesState(prev => {
+              const newState = { ...prev, [key]: isNaN(parsedValue) && parsedValue !== '' ? 0 : parsedValue };
+              if (key === 'data1' && ['beta-binomial', 'jeffreys-binomial'].includes(prev.type) && newState.data2 > newState.data1) newState.data2 = newState.data1;
+              return newState;
+            });
+          };
+
+          const switchBayesCase = (newType) => {
+            switch (newType) {
+              case 'beta-binomial': setBayesState(p => ({ ...p, type: newType, prior1: 2, prior2: 2, data1: 10, data2: 7, testPoint: 0.5 })); break;
+              case 'gamma-poisson': setBayesState(p => ({ ...p, type: newType, prior1: 2, prior2: 1, data1: 5, data2: 15, testPoint: 3 })); break;
+              case 'gamma-exponential': setBayesState(p => ({ ...p, type: newType, prior1: 2, prior2: 1, data1: 5, data2: 10, testPoint: 0.5 })); break;
+              case 'normal-normal': setBayesState(p => ({ ...p, type: newType, prior1: 0, prior2: 2, data1: 5, data2: 2, data3: 1.5, testPoint: 1 })); break;
+              case 'jeffreys-binomial': setBayesState(p => ({ ...p, type: newType, prior1: 0.5, prior2: 0.5, data1: 10, data2: 7, testPoint: 0.5 })); break;
+              default: break;
+            }
+          };
+
+          const addInferenceSample = () => {
+            const newId = inferenceSamples.length > 0 ? Math.max(...inferenceSamples.map(s => s.id)) + 1 : 1;
+            const colors = ['#8b5cf6', '#ec4899', '#10b981', '#f59e0b', '#3b82f6', '#ef4444'];
+            setInferenceSamples([...inferenceSamples, { id: newId, name: `Sample ${newId}`, size: 30, type: 'normal', params: { mu: 50, sigma: 10 }, data: [], color: colors[newId % colors.length] }]);
+          };
+          
+          const removeInferenceSample = (id) => {
+            setInferenceSamples(inferenceSamples.filter(s => s.id !== id));
+            setTestConfig(prev => ({ ...prev, anovaTargets: prev.anovaTargets.filter(tid => tid !== id), target1: prev.target1 == id ? '' : prev.target1, target2: prev.target2 == id ? '' : prev.target2 }));
+          };
+          
+          const updateSampleType = (id, newType) => {
+            setInferenceSamples(inferenceSamples.map(s => {
+              if (s.id === id) {
+                let p = {};
+                if (newType === 'normal') p = { mu: 50, sigma: 10 }; else if (newType === 'uniform') p = { a: 0, b: 100 }; else if (newType === 'exponential') p = { lambda: 0.1 }; else if (newType === 'poisson') p = { lambda: 20 }; else if (newType === 'binomial') p = { n: 1, p: 0.5 };
+                return { ...s, type: newType, params: p, data: [] };
+              }
+              return s;
+            }));
+          };
+          
+          const updateSampleParam = (id, key, val) => {
+            const parsedValue = val === '' ? '' : parseFloat(val);
+            setInferenceSamples(inferenceSamples.map(s => s.id === id ? { ...s, params: { ...s.params, [key]: isNaN(parsedValue) && parsedValue !== '' ? 0 : parsedValue } } : s));
+          };
+
+          const generateDataForSamples = () => {
+            setInferenceSamples(prev => prev.map(samp => {
+              let newData = [];
+              for (let i = 0; i < samp.size; i++) {
+                if (samp.type === 'normal') {
+                  let u = 0, v = 0; while (u === 0) u = Math.random(); while (v === 0) v = Math.random();
+                  let z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+                  newData.push(z * samp.params.sigma + samp.params.mu);
+                } else if (samp.type === 'uniform') newData.push(Math.random() * (samp.params.b - samp.params.a) + samp.params.a);
+                else if (samp.type === 'exponential') newData.push(-Math.log(1 - Math.random()) / samp.params.lambda);
+                else if (samp.type === 'poisson') { let L = Math.exp(-samp.params.lambda), k = 0, p = 1; do { k++; p *= Math.random(); } while (p > L); newData.push(k - 1); }
+                else if (samp.type === 'binomial') { let succ = 0; for (let j = 0; j < samp.params.n; j++) if (Math.random() < samp.params.p) succ++; newData.push(succ); }
+              }
+              return { ...samp, data: newData };
+            }));
+          };
+
+          useEffect(() => { if (inferenceSamples[0].data.length === 0) generateDataForSamples(); }, []);
+
+          const scatterPlotData = useMemo(() => {
+            let allData = inferenceSamples.flatMap(s => s.data);
+            if (allData.length === 0) return null;
+            let minVal = Math.min(...allData), maxVal = Math.max(...allData);
+            const range = maxVal - minVal || 1; minVal -= range * 0.1; maxVal += range * 0.1;
+            const points = inferenceSamples.flatMap(samp => samp.data.map(val => ({ val, jitter: (Math.random() - 0.5) * 0.8, color: samp.color, name: samp.name })));
+            return { points, minVal, maxVal };
+          }, [inferenceSamples]);
+
+          // --- Safe X Axis Bounds for rendering to prevent crash when input is empty ---
+          const safeXMin = isNaN(parseFloat(xAxisBounds.min)) ? -5 : parseFloat(xAxisBounds.min);
+          const safeXMax = isNaN(parseFloat(xAxisBounds.max)) ? 10 : parseFloat(xAxisBounds.max);
+
+          const explorerData = useMemo(() => generateChartData(safeXMin, safeXMax, 400, distributions), [distributions, safeXMin, safeXMax]);
 
           const bayesianAnalysis = useMemo(() => {
             let domainMin = 0, domainMax = 1, curves = [], fisherInfo = 0, posteriorPDF = null, credibleInterval = [0, 1], posteriorMean = 0;
@@ -421,6 +549,9 @@
 
           const inferenceResults = useMemo(() => {
             const { testType, target1, target2, anovaTargets, hypoMean, knownVar1, knownVar2, tails, ciLevel } = testConfig;
+            
+            const targetHypoMean = (hypoMean === '' || isNaN(hypoMean)) ? 0 : parseFloat(hypoMean);
+            
             const s1 = inferenceSamples.find(s => s.id === parseInt(target1)); const s2 = inferenceSamples.find(s => s.id === parseInt(target2));
             const getStats = (data) => {
               if (!data || data.length === 0) return { n: 0, mean: 0, var: 0, std: 0 };
@@ -436,7 +567,7 @@
               return p;
             };
 
-            let result = { statName: '', statVal: 0, pValue: 0, df: null, baseEq: '', subEq: '', ciBase: '', ciSub: '', ci: [0,0], decision: '', anovaTable: null, error: null };
+            let result = { statName: '', statVal: null, pValue: 0, df: null, baseEq: '', subEq: '', ciBase: '', ciSub: '', ci: [0,0], decision: '', anovaTable: null, error: null };
             const alpha = 1 - ciLevel; const zCrit = getZScore(ciLevel);
 
             if (testType === 'anova') {
@@ -452,45 +583,47 @@
                result.anovaTable = { sst, sse, ssTotal: sst + sse, dfT, dfE, dfTotal: dfT + dfE, mst, mse, f, p: result.pValue };
             }
             else if (testType === '1_sample_z' && s1?.data.length > 0) {
-              const { n, mean } = getStats(s1.data); const se = knownVar1 / Math.sqrt(n); const z = (mean - hypoMean) / se;
+              // Note: sample 'std' is returned but intentionally omitted here because Z-tests rely purely on the known population variance
+              const { n, mean } = getStats(s1.data); const se = knownVar1 / Math.sqrt(n); const z = (mean - targetHypoMean) / se;
               result.statName = 'Z'; result.statVal = z; result.pValue = calcPValue(z, 'Z');
-              result.baseEq = 'Z = (x̄ - μ₀) / (σ / √n)'; result.subEq = `Z = (${fmt(mean)} - ${hypoMean}) / (${knownVar1} / √${n}) = ${fmt(z)}`;
+              result.baseEq = 'Z = (x̄ - μ₀) / (σ / √n)'; result.subEq = `Z = (${fmt(mean)} - ${targetHypoMean}) / (${knownVar1} / √${n}) = ${fmt(z)}`;
               result.ciBase = 'CI = x̄ ± Z * (σ / √n)'; result.ciSub = `CI = ${fmt(mean)} ± ${fmt(zCrit)} * (${knownVar1} / √${n})`;
               result.ci = [mean - zCrit * se, mean + zCrit * se];
             } 
             else if (testType === '1_sample_t' && s1?.data.length > 1) {
-              const { n, mean, std } = getStats(s1.data); const se = std / Math.sqrt(n); const t = (mean - hypoMean) / se; const df = n - 1; const tCrit = getTCrit(ciLevel, df);
+              const { n, mean, std } = getStats(s1.data); const se = std / Math.sqrt(n); const t = (mean - targetHypoMean) / se; const df = n - 1; const tCrit = getTCrit(ciLevel, df);
               result.statName = 't'; result.statVal = t; result.df = df; result.pValue = calcPValue(t, 'T', df);
-              result.baseEq = 't = (x̄ - μ₀) / (s / √n)'; result.subEq = `t = (${fmt(mean)} - ${hypoMean}) / (${fmt(std)} / √${n}) = ${fmt(t)}`;
-              result.ciBase = 'CI = x̄ ± t * (s / √n)'; result.ciSub = `CI = ${fmt(mean)} ± ${fmt(tCrit)} * (${fmt(std)} / √${n})`;
+              result.baseEq = 't = (x̄ - μ₀) / (s / √n)'; result.subEq = `t = (${fmt(mean)} - ${targetHypoMean}) / (${fmt(std)} / √${n}) = ${fmt(t)}`;
+              result.ciBase = 'CI = x̄ ± t * (s / √n)'; result.ciSub = `CI ≈ ${fmt(mean)} ± ${fmt(tCrit)} * (${fmt(std)} / √${n})`;
               result.ci = [mean - tCrit * se, mean + tCrit * se];
             }
             else if (testType === '2_sample_z' && s1?.data.length > 0 && s2?.data.length > 0) {
-              const st1 = getStats(s1.data), st2 = getStats(s2.data); const se = Math.sqrt((knownVar1*knownVar1)/st1.n + (knownVar2*knownVar2)/st2.n); const z = (st1.mean - st2.mean - hypoMean) / se;
+              // Note: sample 'std' values are omitted intentionally for 2-sample Z-test, defaulting to the assumed known variances
+              const st1 = getStats(s1.data), st2 = getStats(s2.data); const se = Math.sqrt((knownVar1*knownVar1)/st1.n + (knownVar2*knownVar2)/st2.n); const z = (st1.mean - st2.mean - targetHypoMean) / se;
               result.statName = 'Z'; result.statVal = z; result.pValue = calcPValue(z, 'Z');
-              result.baseEq = 'Z = (x̄₁ - x̄₂ - d₀) / √(σ₁²/n₁ + σ₂²/n₂)'; result.subEq = `Z = (${fmt(st1.mean)} - ${fmt(st2.mean)} - ${hypoMean}) / √(${knownVar1}²/${st1.n} + ${knownVar2}²/${st2.n}) = ${fmt(z)}`;
+              result.baseEq = 'Z = (x̄₁ - x̄₂ - d₀) / √(σ₁²/n₁ + σ₂²/n₂)'; result.subEq = `Z = (${fmt(st1.mean)} - ${fmt(st2.mean)} - ${targetHypoMean}) / √(${knownVar1}²/${st1.n} + ${knownVar2}²/${st2.n}) = ${fmt(z)}`;
               result.ciBase = 'CI = (x̄₁ - x̄₂) ± Z * SE'; result.ciSub = `CI = ${fmt(st1.mean - st2.mean)} ± ${fmt(zCrit)} * ${fmt(se)}`;
               result.ci = [(st1.mean - st2.mean) - zCrit * se, (st1.mean - st2.mean) + zCrit * se];
             }
             else if (testType === '2_sample_t_eq' && s1?.data.length > 1 && s2?.data.length > 1) {
               const st1 = getStats(s1.data), st2 = getStats(s2.data); const df = st1.n + st2.n - 2;
               const sp2 = ((st1.n - 1)*st1.var + (st2.n - 1)*st2.var) / df; const sp = Math.sqrt(sp2); const se = sp * Math.sqrt(1/st1.n + 1/st2.n);
-              const t = (st1.mean - st2.mean - hypoMean) / se; const tCrit = getTCrit(ciLevel, df);
+              const t = (st1.mean - st2.mean - targetHypoMean) / se; const tCrit = getTCrit(ciLevel, df);
               result.statName = 't'; result.statVal = t; result.df = df; result.pValue = calcPValue(t, 'T', df);
-              result.baseEq = 't = (x̄₁ - x̄₂ - d₀) / (S_p √(1/n₁ + 1/n₂))'; result.subEq = `t = (${fmt(st1.mean)} - ${fmt(st2.mean)} - ${hypoMean}) / (${fmt(sp)} √(1/${st1.n} + 1/${st2.n})) = ${fmt(t)}`;
-              result.ciBase = 'CI = (x̄₁ - x̄₂) ± t * SE'; result.ciSub = `CI = ${fmt(st1.mean - st2.mean)} ± ${fmt(tCrit)} * ${fmt(se)}`;
+              result.baseEq = 't = (x̄₁ - x̄₂ - d₀) / (S_p √(1/n₁ + 1/n₂))'; result.subEq = `t = (${fmt(st1.mean)} - ${fmt(st2.mean)} - ${targetHypoMean}) / (${fmt(sp)} √(1/${st1.n} + 1/${st2.n})) = ${fmt(t)}`;
+              result.ciBase = 'CI = (x̄₁ - x̄₂) ± t * SE'; result.ciSub = `CI ≈ ${fmt(st1.mean - st2.mean)} ± ${fmt(tCrit)} * ${fmt(se)}`;
               result.ci = [(st1.mean - st2.mean) - tCrit * se, (st1.mean - st2.mean) + tCrit * se];
             }
             else if (testType === '2_sample_t_uneq' && s1?.data.length > 1 && s2?.data.length > 1) {
-              const st1 = getStats(s1.data), st2 = getStats(s2.data); const se = Math.sqrt(st1.var/st1.n + st2.var/st2.n); const t = (st1.mean - st2.mean - hypoMean) / se;
+              const st1 = getStats(s1.data), st2 = getStats(s2.data); const se = Math.sqrt(st1.var/st1.n + st2.var/st2.n); const t = (st1.mean - st2.mean - targetHypoMean) / se;
               const v1 = st1.var/st1.n, v2 = st2.var/st2.n; const df = Math.pow(v1 + v2, 2) / (Math.pow(v1, 2)/(st1.n-1) + Math.pow(v2, 2)/(st2.n-1)); const tCrit = getTCrit(ciLevel, df);
               result.statName = 't'; result.statVal = t; result.df = df; result.pValue = calcPValue(t, 'T', df);
-              result.baseEq = "t = (x̄₁ - x̄₂ - d₀) / √(s₁²/n₁ + s₂²/n₂) [Welch's]"; result.subEq = `t = (${fmt(st1.mean)} - ${fmt(st2.mean)} - ${hypoMean}) / √(${fmt(st1.var)}/${st1.n} + ${fmt(st2.var)}/${st2.n}) = ${fmt(t)}`;
-              result.ciBase = 'CI = (x̄₁ - x̄₂) ± t * SE'; result.ciSub = `CI = ${fmt(st1.mean - st2.mean)} ± ${fmt(tCrit)} * ${fmt(se)}`;
+              result.baseEq = "t = (x̄₁ - x̄₂ - d₀) / √(s₁²/n₁ + s₂²/n₂) [Welch's]"; result.subEq = `t = (${fmt(st1.mean)} - ${fmt(st2.mean)} - ${targetHypoMean}) / √(${fmt(st1.var)}/${st1.n} + ${fmt(st2.var)}/${st2.n}) = ${fmt(t)}`;
+              result.ciBase = 'CI = (x̄₁ - x̄₂) ± t * SE'; result.ciSub = `CI ≈ ${fmt(st1.mean - st2.mean)} ± ${fmt(tCrit)} * ${fmt(se)}`;
               result.ci = [(st1.mean - st2.mean) - tCrit * se, (st1.mean - st2.mean) + tCrit * se];
             }
             else if (testType === '1_sample_prop' && s1?.data.length > 0) {
-              const n = s1.data.length, successes = s1.data.filter(x => x >= 1).length, pHat = successes / n, p0 = hypoMean, se = Math.sqrt((p0 * (1 - p0)) / n); const z = (pHat - p0) / se;
+              const n = s1.data.length, successes = s1.data.filter(x => x >= 1).length, pHat = successes / n, p0 = targetHypoMean, se = Math.sqrt((p0 * (1 - p0)) / n); const z = (pHat - p0) / se;
               result.statName = 'Z'; result.statVal = z; result.pValue = calcPValue(z, 'Z');
               result.baseEq = 'Z = (p̂ - p₀) / √( p₀(1-p₀)/n )'; result.subEq = `Z = (${fmt(pHat)} - ${p0}) / √( ${p0}(${1-p0})/${n} ) = ${fmt(z)}`;
               const seCI = Math.sqrt((pHat * (1 - pHat)) / n); result.ciBase = 'CI = p̂ ± Z * √( p̂(1-p̂)/n )'; result.ciSub = `CI = ${fmt(pHat)} ± ${fmt(zCrit)} * ${fmt(seCI)}`; result.ci = [pHat - zCrit * seCI, pHat + zCrit * seCI];
@@ -503,117 +636,19 @@
               result.baseEq = 'Z = (p̂₁ - p̂₂) / √( p_pool(1-p_pool)(1/n₁ + 1/n₂) )'; result.subEq = `Z = (${fmt(p1)} - ${fmt(p2)}) / √( ${fmt(pPool)}(${fmt(1-pPool)})(1/${n1} + 1/${n2}) ) = ${fmt(z)}`;
               const seCI = Math.sqrt(p1*(1-p1)/n1 + p2*(1-p2)/n2); result.ciBase = 'CI = (p̂₁ - p̂₂) ± Z * SE'; result.ciSub = `CI = ${fmt(p1 - p2)} ± ${fmt(zCrit)} * ${fmt(seCI)}`; result.ci = [(p1 - p2) - zCrit * seCI, (p1 - p2) + zCrit * seCI];
             }
-            if (result.statVal !== 0 || result.anovaTable) {
+            
+            if (result.statVal !== null || result.anovaTable) {
                result.decision = result.pValue < alpha ? `Reject Null Hypothesis (Significant at α=${fmt(alpha)})` : `Fail to Reject Null Hypothesis (Not Significant)`;
             }
             return result;
           }, [testConfig, inferenceSamples]);
 
-          // --- Plotter Component ---
-          const Plotter = ({ chartData, domainMin, domainMax, xLabel, yConfig }) => {
-            const width = 800, height = 400, padding = 50, innerWidth = width - padding * 2, innerHeight = height - padding * 2;
-            const maxY = yConfig.auto ? chartData.maxY : yConfig.max, minY = yConfig.auto ? 0 : yConfig.min;
-            const scaleX = (x) => padding + ((x - domainMin) / (domainMax - domainMin)) * innerWidth;
-            const scaleY = (y) => height - padding - ((y - minY) / (maxY - minY)) * innerHeight;
-
-            const gridLines = [];
-            for (let i = 0; i <= 10; i++) {
-                const xVal = domainMin + (domainMax - domainMin) * (i / 10);
-                gridLines.push(<g key={`grid-x-${i}`}><line x1={scaleX(xVal)} y1={padding} x2={scaleX(xVal)} y2={height - padding} stroke="#374151" /><text x={scaleX(xVal)} y={height - padding + 20} fill="#9ca3af" fontSize="12" textAnchor="middle">{fmt(xVal)}</text></g>);
-            }
-            if (yConfig.show) {
-              for (let i = 0; i <= 5; i++) {
-                const yVal = minY + (maxY - minY) * (i / 5);
-                gridLines.push(<g key={`grid-y-${i}`}><line x1={padding} y1={scaleY(yVal)} x2={width - padding} y2={scaleY(yVal)} stroke="#374151" strokeDasharray="4,4" /><text x={padding - 10} y={scaleY(yVal) + 4} fill="#9ca3af" fontSize="12" textAnchor="end">{fmt(yVal)}</text></g>);
-              }
-            }
-            return (
-              <div className="relative w-full overflow-hidden bg-gray-900 rounded-xl border border-gray-700 shadow-2xl p-4">
-                <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
-                  {gridLines}
-                  <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#6b7280" strokeWidth="2" />
-                  <text x={width / 2} y={height - 5} fill="#d1d5db" fontSize="14" textAnchor="middle">{xLabel}</text>
-                  {yConfig.show && <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#6b7280" strokeWidth="2" />}
-                  {activeTab === 'bayesian' && bayesianAnalysis.credibleInterval && ( <rect x={scaleX(bayesianAnalysis.credibleInterval[0])} y={padding} width={scaleX(bayesianAnalysis.credibleInterval[1]) - scaleX(bayesianAnalysis.credibleInterval[0])} height={innerHeight} fill="#10b981" opacity="0.1" /> )}
-                  {chartData.data.map((dist, i) => {
-                    if (dist.points.length === 0) return null;
-                    if (dist.isDiscrete) return ( <g key={`discrete-${i}`}>{dist.points.map((p, idx) => (<g key={idx}><line x1={scaleX(p.x)} y1={scaleY(0)} x2={scaleX(p.x)} y2={scaleY(p.y)} stroke={dist.color} strokeWidth="3" strokeDasharray={dist.isDashed ? "5,5" : "none"} opacity={0.8} /><circle cx={scaleX(p.x)} cy={scaleY(p.y)} r="4" fill={dist.color} /></g>))}</g>);
-                    const pathData = dist.points.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${scaleX(p.x)} ${scaleY(Math.max(minY, Math.min(maxY, p.y)))}`).join(' ');
-                    return <path key={`cont-${i}`} d={pathData} fill="none" stroke={dist.color} strokeWidth="3" strokeDasharray={dist.isDashed ? "5,5" : "none"} />;
-                  })}
-                  {activeTab === 'bayesian' && <circle cx={scaleX(bayesState.testPoint)} cy={scaleY(bayesianAnalysis.testValue)} r="6" fill="#ef4444" stroke="white" strokeWidth="2" />}
-                </svg>
-                <div className="absolute top-6 right-6 flex flex-col gap-2 bg-gray-800/90 p-3 rounded-lg border border-gray-700 backdrop-blur-sm">
-                  {chartData.data.map((dist, i) => (
-                    <div key={i} className="flex items-center gap-2"><div className="w-4 h-1" style={{ backgroundColor: dist.color, borderBottom: dist.isDashed ? '2px dashed white' : 'none' }}></div><span className="text-gray-200 text-sm font-bold">{dist.name}</span></div>
-                  ))}
-                </div>
-              </div>
-            );
-          };
-
-          const getEquationTexts = (dist) => {
-            const p = dist.params; let base = null, param = null;
-            switch (dist.type) {
-              case 'normal': base = <>f(x) = (1 / &sigma;&radic;(2&pi;)) e<sup>-&frac12; ((x-&mu;)/&sigma;)&sup2;</sup></>; param = <>f(x) = (1 / {fmt(p.sigma)}&radic;(2&pi;)) e<sup>-&frac12; ((x-{fmt(p.mu)})/{fmt(p.sigma)})&sup2;</sup></>; break;
-              case 'beta': base = <>f(x) = [ x<sup>&alpha;-1</sup> (1-x)<sup>&beta;-1</sup> ] / B(&alpha;, &beta;)</>; param = <>f(x) = [ x<sup>{fmt(p.alpha - 1)}</sup> (1-x)<sup>{fmt(p.beta - 1)}</sup> ] / B({fmt(p.alpha)}, {fmt(p.beta)})</>; break;
-              case 'gamma': base = <>f(x) = &beta;<sup>&alpha;</sup> x<sup>&alpha;-1</sup> e<sup>-&beta;x</sup> / &Gamma;(&alpha;)</>; param = <>f(x) = {fmt(p.beta)}<sup>{fmt(p.alpha)}</sup> x<sup>{fmt(p.alpha - 1)}</sup> e<sup>-{fmt(p.beta)}x</sup> / &Gamma;({fmt(p.alpha)})</>; break;
-              case 'exponential': base = <>f(x) = &lambda; e<sup>-&lambda;x</sup></>; param = <>f(x) = {fmt(p.lambda)} e<sup>-{fmt(p.lambda)}x</sup></>; break;
-              case 'uniform': base = <>f(x) = 1 / (b - a)</>; param = <>f(x) = 1 / ({fmt(p.b)} - {fmt(p.a)}) = {fmt(1 / (p.b - p.a))}</>; break;
-              case 'laplace': base = <>f(x) = (1 / 2b) e<sup>-|x-&mu;|/b</sup></>; param = <>f(x) = (1 / {fmt(2 * p.b)}) e<sup>-|x-{fmt(p.mu)}|/{fmt(p.b)}</sup></>; break;
-              case 'lognormal': base = <>f(x) = (1 / x&sigma;&radic;(2&pi;)) e<sup>-(ln(x)-&mu;)&sup2; / (2&sigma;&sup2;)</sup></>; param = <>f(x) = (1 / x({fmt(p.sigma)})&radic;(2&pi;)) e<sup>-(ln(x)-{fmt(p.mu)})&sup2; / (2({fmt(p.sigma)})&sup2;)</sup></>; break;
-              case 'cauchy': base = <>f(x) = 1 / (&pi;&gamma;[1 + ((x-x₀)/&gamma;)&sup2;])</>; param = <>f(x) = 1 / (&pi;({fmt(p.gammaVal)})[1 + ((x-{fmt(p.x0)})/{fmt(p.gammaVal)})&sup2;])</>; break;
-              case 'weibull': base = <>f(x) = (k/&lambda;) (x/&lambda;)<sup>k-1</sup> e<sup>-(x/&lambda;)<sup>k</sup></sup></>; param = <>f(x) = ({fmt(p.k)}/{fmt(p.lambda)}) (x/{fmt(p.lambda)})<sup>{fmt(p.k - 1)}</sup> e<sup>-(x/{fmt(p.lambda)})<sup>{fmt(p.k)}</sup></sup></>; break;
-              case 'pareto': base = <>f(x) = (&alpha; x<sub>m</sub><sup>&alpha;</sup>) / x<sup>&alpha;+1</sup></>; param = <>f(x) = ({fmt(p.alpha)} &middot; {fmt(p.xm)}<sup>{fmt(p.alpha)}</sup>) / x<sup>{fmt(p.alpha + 1)}</sup></>; break;
-              case 'logistic': base = <>f(x) = e<sup>-(x-&mu;)/s</sup> / (s(1 + e<sup>-(x-&mu;)/s</sup>)&sup2;)</>; param = <>f(x) = e<sup>-(x-{fmt(p.mu)})/{fmt(p.s)}</sup> / ({fmt(p.s)}(1 + e<sup>-(x-{fmt(p.mu)})/{fmt(p.s)}</sup>)&sup2;)</>; break;
-              case 'rayleigh': base = <>f(x) = (x/&sigma;&sup2;) e<sup>-x&sup2;/(2&sigma;&sigma;)</sup></>; param = <>f(x) = (x/{fmt(p.sigma * p.sigma)}) e<sup>-x&sup2;/{fmt(2 * p.sigma * p.sigma)}</sup></>; break;
-              case 'student_t': base = <>f(t) = C &middot; (1 + t&sup2;/&nu;)<sup>-(&nu;+1)/2</sup></>; param = <>f(t) = C &middot; (1 + t&sup2;/{fmt(p.nu)})<sup>-{fmt((p.nu + 1) / 2)}</sup></>; break;
-              case 'f_dist': base = <>f(x) = C &middot; &radic;( (d<sub>1</sub>x)<sup>d<sub>1</sub></sup> d<sub>2</sub><sup>d<sub>2</sub></sup> / (d<sub>1</sub>x + d<sub>2</sub>)<sup>d<sub>1</sub>+d<sub>2</sub></sup> ) / x</>; param = <>f(x) = C &middot; &radic;( ({fmt(p.d1)}x)<sup>{fmt(p.d1)}</sup> {fmt(p.d2)}<sup>{fmt(p.d2)}</sup> / ({fmt(p.d1)}x + {fmt(p.d2)})<sup>{fmt(p.d1 + p.d2)}</sup> ) / x</>; break;
-              case 'chisquare': base = <>f(x) = C &middot; x<sup>k/2 - 1</sup> e<sup>-x/2</sup></>; param = <>f(x) = C &middot; x<sup>{fmt(p.k / 2 - 1)}</sup> e<sup>-x/2</sup></>; break;
-              case 'poisson': base = <>P(X=x) = &lambda;<sup>x</sup> e<sup>-&lambda;</sup> / x!</>; param = <>P(X=x) = {fmt(p.lambda)}<sup>x</sup> e<sup>-{fmt(p.lambda)}</sup> / x!</>; break;
-              case 'binomial': base = <>P(X=x) = C(n, x) p<sup>x</sup> (1-p)<sup>n-x</sup></>; param = <>P(X=x) = C({fmt(p.n)}, x) {fmt(p.p)}<sup>x</sup> {fmt(1 - p.p)}<sup>{fmt(p.n)}-x</sup></>; break;
-              case 'bernoulli': base = <>P(X=x) = p<sup>x</sup> (1-p)<sup>1-x</sup></>; param = <>P(X=x) = {fmt(p.p)}<sup>x</sup> {fmt(1 - p.p)}<sup>1-x</sup></>; break;
-              case 'geometric': base = <>P(X=x) = p(1-p)<sup>x-1</sup></>; param = <>P(X=x) = {fmt(p.p)}({fmt(1 - p.p)})<sup>x-1</sup></>; break;
-              case 'negative_binomial': base = <>P(X=x) = C(x-1, r-1) p<sup>r</sup> (1-p)<sup>x-r</sup></>; param = <>P(X=x) = C(x-1, {fmt(p.r - 1)}) {fmt(p.p)}<sup>{fmt(p.r)}</sup> {fmt(1 - p.p)}<sup>x-{fmt(p.r)}</sup></>; break;
-              case 'hypergeometric': base = <>P(X=x) = [C(K,x) C(N-K, n-x)] / C(N,n)</>; param = <>P(X=x) = [C({fmt(p.K)},x) C({fmt(p.N - p.K)}, {fmt(p.n)}-x)] / C({fmt(p.N)},{fmt(p.n)})</>; break;
-              case 'discrete_uniform': base = <>P(X=x) = 1 / (b - a + 1)</>; param = <>P(X=x) = 1 / ({fmt(p.b)} - {fmt(p.a)} + 1) = {fmt(1 / (p.b - p.a + 1))}</>; break;
-              case 'likelihood':
-              case 'likelihood_discrete':
-                if (p.lType === 'binomial') { base = <>L(p|data) &prop; p<sup>k</sup> (1-p)<sup>n-k</sup></>; param = <>L(p) &prop; p<sup>{fmt(p.k)}</sup> (1-p)<sup>{fmt(p.n - p.k)}</sup></>; } 
-                else if (p.lType === 'poisson') { base = <>L(&lambda;|data) &prop; &lambda;<sup>&Sigma;x</sup> e<sup>-n&lambda;</sup></>; param = <>L(&lambda;) &prop; &lambda;<sup>{fmt(p.k)}</sup> e<sup>-{fmt(p.n)}&lambda;</sup></>; } 
-                else if (p.lType === 'exponential') { base = <>L(&lambda;|data) &prop; &lambda;<sup>n</sup> e<sup>-&lambda;&Sigma;x</sup></>; param = <>L(&lambda;) &prop; &lambda;<sup>{fmt(p.n)}</sup> e<sup>-{fmt(p.sumX)}&lambda;</sup></>; } 
-                else if (p.lType === 'normal') { base = <>L(&mu;|data) &prop; e<sup>-(n/2&sigma;&sup2;) (x̄-&mu;)&sup2;</sup></>; param = <>L(&mu;) &prop; e<sup>-({fmt(p.n)} / 2({fmt(p.sigma)})&sup2;) ({fmt(p.xBar)} - &mu;)&sup2;</sup></>; } break;
-              default: base = <>Equation not available</>; param = <>N/A</>;
-            }
-            return { base, param };
-          };
-
-          const EquationsTable = () => {
-            if (activeTab === 'inference') return null;
-            const distsToRender = activeTab === 'bayesian' ? bayesianAnalysis.curves : distributions;
-            return (
-              <div className="mt-8 bg-gray-900 rounded-xl border border-gray-800 shadow-xl overflow-hidden">
-                <div className="bg-gray-800 p-4 border-b border-gray-700"><h2 className="text-xl font-bold text-blue-400">Mathematical Equations</h2></div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm text-gray-300">
-                    <thead className="bg-gray-800/50 text-gray-400"><tr><th className="p-4 font-semibold w-1/4">Distribution</th><th className="p-4 font-semibold w-1/3">Base Equation</th><th className="p-4 font-semibold">Parameterized Equation</th></tr></thead>
-                    <tbody className="divide-y divide-gray-800">
-                      {distsToRender.map((dist, idx) => {
-                        const { base, param } = getEquationTexts(dist);
-                        return (<tr key={idx} className="hover:bg-gray-800/20"><td className="p-4 flex items-center gap-2"><span className="w-3 h-3 rounded-full flex-shrink-0" style={{backgroundColor: dist.color}}></span><span>{dist.name}</span></td><td className="p-4 font-serif text-base md:text-lg text-pink-300">{base}</td><td className="p-4 font-serif text-base md:text-lg text-emerald-300">{param}</td></tr>);
-                      })}
-                      {distsToRender.length === 0 && (
-                        <tr><td colSpan="3" className="p-4 text-center text-gray-500">No distributions active.</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            );
-          };
-
           const renderDistributionParams = (dist) => {
-            const p = dist.params, update = (name, val) => updateDistParam(dist.id, name, val);
+            const p = dist.params;
+            const update = (name, val) => {
+              const parsedVal = val === '' ? '' : parseFloat(val);
+              updateDistParam(dist.id, name, isNaN(parsedVal) && val !== '' ? 0 : parsedVal);
+            };
             switch (dist.type) {
               case 'normal': return ( <><label className="text-sm text-gray-400 flex justify-between"><span>Mean (μ)</span> <span>{fmt(p.mu)}</span></label><input type="range" min="-10" max="10" step="0.5" value={p.mu} onChange={(e) => update('mu', e.target.value)} className="w-full accent-blue-500 mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Std Dev (σ)</span> <span>{fmt(p.sigma)}</span></label><input type="range" min="0.1" max="5" step="0.1" value={p.sigma} onChange={(e) => update('sigma', e.target.value)} className="w-full accent-blue-500" /></> );
               case 'student_t': return ( <><label className="text-sm text-gray-400 flex justify-between"><span>df (ν)</span> <span>{fmt(p.nu)}</span></label><input type="range" min="1" max="30" step="1" value={p.nu} onChange={(e) => update('nu', e.target.value)} className="w-full accent-blue-500" /></> );
@@ -673,12 +708,12 @@
                 {activeTab === 'explorer' && (
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     <div className="lg:col-span-2 space-y-4">
-                      <Plotter chartData={explorerData} domainMin={xAxisBounds.min} domainMax={xAxisBounds.max} xLabel="Variable Value (X)" yConfig={yAxisConfig} />
+                      <Plotter chartData={explorerData} domainMin={safeXMin} domainMax={safeXMax} xLabel="Variable Value (X)" yConfig={yAxisConfig} />
                       <div className="flex flex-wrap gap-4 bg-gray-900 p-4 rounded-xl border border-gray-800 justify-center items-center text-sm">
                         <span className="text-gray-400">X-Axis:</span>
-                        <input type="number" value={xAxisBounds.min} onChange={e => setXAxisBounds({ ...xAxisBounds, min: parseFloat(e.target.value) || 0 })} className="w-16 bg-gray-800 text-white p-1 border border-gray-700 text-center" />
+                        <input type="number" value={xAxisBounds.min} onChange={e => setXAxisBounds({ ...xAxisBounds, min: e.target.value })} className="w-20 bg-gray-800 text-white p-1 border border-gray-700 text-center" />
                         <span>to</span>
-                        <input type="number" value={xAxisBounds.max} onChange={e => setXAxisBounds({ ...xAxisBounds, max: parseFloat(e.target.value) || 0 })} className="w-16 bg-gray-800 text-white p-1 border border-gray-700 text-center" />
+                        <input type="number" value={xAxisBounds.max} onChange={e => setXAxisBounds({ ...xAxisBounds, max: e.target.value })} className="w-20 bg-gray-800 text-white p-1 border border-gray-700 text-center" />
                         <div className="w-px h-6 bg-gray-700 hidden md:block"></div>
                         <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={yAxisConfig.show} onChange={e => setYAxisConfig({...yAxisConfig, show: e.target.checked})} className="accent-blue-500" /><span className="text-gray-400">Show Y</span></label>
                         <select value={yAxisConfig.auto ? 'auto' : 'manual'} onChange={e => setYAxisConfig({...yAxisConfig, auto: e.target.value === 'auto'})} className="bg-gray-800 border-gray-700 text-white p-1 rounded"><option value="auto">Auto</option><option value="manual">Manual Max</option></select>
@@ -719,7 +754,7 @@
                        <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl overflow-hidden">
                           <h2 className="text-xl font-bold text-purple-400 mb-4">Samples Visualization (Overlapping Scatter)</h2>
                           <div className="border border-gray-700 h-64 relative mb-4 rounded-lg bg-gray-950 flex flex-col justify-between py-2 overflow-hidden">
-                              <ScatterPlot />
+                              <ScatterPlot scatterPlotData={scatterPlotData} inferenceSamples={inferenceSamples} />
                           </div>
                        </div>
 
@@ -729,7 +764,7 @@
                           </div>
                        )}
 
-                       {inferenceResults?.statVal !== 0 && !inferenceResults.error && (
+                       {inferenceResults?.statVal !== null && !inferenceResults.error && (
                        <div className="bg-gray-900 p-6 rounded-xl border border-purple-500/30 shadow-xl">
                           <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
                             <h2 className="text-xl font-bold text-purple-400 flex items-center gap-2">Hypothesis Testing Results <button onClick={() => setInfoModal(testConfig.testType)} className="text-blue-400 bg-gray-800 rounded-full w-5 h-5 flex justify-center items-center">ℹ</button></h2>
@@ -808,15 +843,15 @@
                               
                               {testConfig.testType !== 'anova' && (
                                 <div className="grid grid-cols-2 gap-4">
-                                  <div><label className="text-xs text-gray-400 block mb-1">Hypo Mean (μ₀/d₀/p₀)</label><input type="number" step={testConfig.testType.includes('prop') ? 0.05 : 1} value={testConfig.hypoMean} onChange={(e) => setTestConfig({...testConfig, hypoMean: parseFloat(e.target.value) || 0})} className="w-full bg-gray-800 text-white p-2 rounded border border-gray-700" /></div>
+                                  <div><label className="text-xs text-gray-400 block mb-1">Hypo Mean (μ₀/d₀/p₀)</label><input type="number" step={testConfig.testType.includes('prop') ? 0.05 : 1} value={testConfig.hypoMean} onChange={(e) => setTestConfig({...testConfig, hypoMean: e.target.value})} className="w-full bg-gray-800 text-white p-2 rounded border border-gray-700" /></div>
                                   <div><label className="text-xs text-gray-400 block mb-1">Tails</label><select value={testConfig.tails} onChange={e => setTestConfig({...testConfig, tails: e.target.value})} className="w-full bg-gray-800 text-white p-2 rounded border border-gray-700"><option value="two">Two-Tailed (≠)</option><option value="left">Left-Tailed (&lt;)</option><option value="right">Right-Tailed (&gt;)</option></select></div>
                                 </div>
                               )}
 
                               {(testConfig.testType === '1_sample_z' || testConfig.testType === '2_sample_z') && (
                                 <div className="grid grid-cols-2 gap-4">
-                                  <div><label className="text-xs text-gray-400 block mb-1">Known σ₁</label><input type="number" min="0.1" value={testConfig.knownVar1} onChange={(e) => setTestConfig({...testConfig, knownVar1: parseFloat(e.target.value) || 1})} className="w-full bg-gray-800 text-white p-2 rounded border border-gray-700" /></div>
-                                  {testConfig.testType === '2_sample_z' && <div><label className="text-xs text-gray-400 block mb-1">Known σ₂</label><input type="number" min="0.1" value={testConfig.knownVar2} onChange={(e) => setTestConfig({...testConfig, knownVar2: parseFloat(e.target.value) || 1})} className="w-full bg-gray-800 text-white p-2 rounded border border-gray-700" /></div>}
+                                  <div><label className="text-xs text-gray-400 block mb-1">Known σ₁</label><input type="number" min="0.1" value={testConfig.knownVar1} onChange={(e) => setTestConfig({...testConfig, knownVar1: e.target.value})} className="w-full bg-gray-800 text-white p-2 rounded border border-gray-700" /></div>
+                                  {testConfig.testType === '2_sample_z' && <div><label className="text-xs text-gray-400 block mb-1">Known σ₂</label><input type="number" min="0.1" value={testConfig.knownVar2} onChange={(e) => setTestConfig({...testConfig, knownVar2: e.target.value})} className="w-full bg-gray-800 text-white p-2 rounded border border-gray-700" /></div>}
                                 </div>
                               )}
 
@@ -864,7 +899,42 @@
                 {activeTab === 'bayesian' && (
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     <div className="lg:col-span-2 space-y-4">
-                      <Plotter chartData={bayesianAnalysis.chartData} domainMin={bayesianAnalysis.domainMin} domainMax={bayesianAnalysis.domainMax} xLabel="Parameter Space (θ)" yConfig={bayesYAxisConfig} />
+                      
+                      <Plotter 
+                        chartData={bayesianAnalysis.chartData} 
+                        domainMin={bayesianAnalysis.domainMin} 
+                        domainMax={bayesianAnalysis.domainMax} 
+                        xLabel="Parameter Space (θ)" 
+                        yConfig={bayesYAxisConfig}
+                        showCI={true}
+                        credibleInterval={bayesianAnalysis.credibleInterval}
+                        testPoint={bayesState.testPoint}
+                        testValue={bayesianAnalysis.testValue}
+                      />
+                      
+                      <div className="flex flex-wrap gap-4 bg-gray-900 p-4 rounded-xl border border-gray-800 justify-center items-center text-sm">
+                        <label className="flex items-center gap-1 cursor-pointer">
+                          <input type="checkbox" checked={bayesYAxisConfig.show} onChange={e => setBayesYAxisConfig({...bayesYAxisConfig, show: e.target.checked})} className="accent-pink-500" />
+                          <span className="text-gray-400">Show Y Axis</span>
+                        </label>
+                        <div className="w-px h-6 bg-gray-700 hidden md:block"></div>
+                        <select 
+                          value={bayesYAxisConfig.auto ? 'auto' : 'manual'} 
+                          onChange={e => {
+                            const isAuto = e.target.value === 'auto';
+                            setBayesYAxisConfig({
+                              ...bayesYAxisConfig, 
+                              auto: isAuto,
+                              max: isAuto ? 1 : bayesianAnalysis.chartData.maxY
+                            });
+                          }} 
+                          className="bg-gray-800 border-gray-700 text-white p-1 rounded"
+                        >
+                          <option value="auto">Auto Scale</option>
+                          <option value="manual">Manual Max</option>
+                        </select>
+                        {!bayesYAxisConfig.auto && <input type="number" step="0.1" value={bayesYAxisConfig.max} onChange={e => setBayesYAxisConfig({...bayesYAxisConfig, max: parseFloat(e.target.value) || 1})} className="w-16 bg-gray-800 text-white p-1 border border-gray-700 text-center" />}
+                      </div>
                       
                       <div className="bg-gray-900 p-6 rounded-xl border border-pink-500/30 shadow-xl grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
@@ -884,7 +954,7 @@
                         <div>
                           <h3 className="text-lg font-bold text-blue-400 mb-3 border-b border-gray-700 pb-1">Hypothesis Testing</h3>
                           <div className="space-y-3 text-sm bg-gray-800 p-3 rounded">
-                              <label className="flex justify-between items-center mb-2"><span className="text-gray-400">Test Point (H₀: θ = ?):</span><input type="number" step="0.05" value={bayesState.testPoint} onChange={(e) => updateBayesState('testPoint', parseFloat(e.target.value) || 0)} className="w-20 bg-gray-900 text-white p-1 border border-gray-600 rounded text-center" /></label>
+                              <label className="flex justify-between items-center mb-2"><span className="text-gray-400">Test Point (H₀: θ = ?):</span><input type="number" step="0.05" value={bayesState.testPoint} onChange={(e) => updateBayesState('testPoint', e.target.value)} className="w-20 bg-gray-900 text-white p-1 border border-gray-600 rounded text-center" /></label>
                               <div className="flex justify-between items-center mt-3"><span className="text-gray-500">Status:</span>{bayesianAnalysis.isPlausible ? <span className="text-emerald-400 font-bold">Plausible ✓</span> : <span className="text-red-400 font-bold">Rejected ✗</span>}</div>
                               <div className="flex justify-between items-center mt-2"><span className="text-gray-500">Density at Point:</span><span className="font-mono text-white">{fmt(bayesianAnalysis.testValue)}</span></div>
                           </div>
@@ -903,24 +973,24 @@
                       <div className="bg-gray-800 p-4 rounded-lg border-l-4 border-gray-400">
                         <div className="flex justify-between items-center mb-2"><h3 className="font-bold text-gray-300">1. Prior Belief</h3></div>
                         {['beta-binomial', 'jeffreys-binomial'].includes(bayesState.type) && (
-                          <><label className="text-sm text-gray-400 flex justify-between"><span>Pseudo-Succ (α)</span> <span>{fmt(bayesState.prior1)}</span></label><input type="range" disabled={bayesState.type === 'jeffreys-binomial'} min="0.1" max="10" step="0.1" value={bayesState.prior1} onChange={(e) => updateBayesState('prior1', parseFloat(e.target.value))} className={`w-full mb-2 ${bayesState.type === 'jeffreys-binomial' ? 'opacity-50 cursor-not-allowed' : ''}`} /><label className="text-sm text-gray-400 flex justify-between"><span>Pseudo-Fail (β)</span> <span>{fmt(bayesState.prior2)}</span></label><input type="range" disabled={bayesState.type === 'jeffreys-binomial'} min="0.1" max="10" step="0.1" value={bayesState.prior2} onChange={(e) => updateBayesState('prior2', parseFloat(e.target.value))} className={`w-full ${bayesState.type === 'jeffreys-binomial' ? 'opacity-50 cursor-not-allowed' : ''}`} /></>
+                          <><label className="text-sm text-gray-400 flex justify-between"><span>Pseudo-Succ (α)</span> <span>{fmt(bayesState.prior1)}</span></label><input type="range" disabled={bayesState.type === 'jeffreys-binomial'} min="0.1" max="10" step="0.1" value={bayesState.prior1} onChange={(e) => updateBayesState('prior1', e.target.value)} className={`w-full mb-2 ${bayesState.type === 'jeffreys-binomial' ? 'opacity-50 cursor-not-allowed' : ''}`} /><label className="text-sm text-gray-400 flex justify-between"><span>Pseudo-Fail (β)</span> <span>{fmt(bayesState.prior2)}</span></label><input type="range" disabled={bayesState.type === 'jeffreys-binomial'} min="0.1" max="10" step="0.1" value={bayesState.prior2} onChange={(e) => updateBayesState('prior2', e.target.value)} className={`w-full ${bayesState.type === 'jeffreys-binomial' ? 'opacity-50 cursor-not-allowed' : ''}`} /></>
                         )}
-                        {['gamma-poisson', 'gamma-exponential'].includes(bayesState.type) && ( <><label className="text-sm text-gray-400 flex justify-between"><span>Shape (α)</span> <span>{fmt(bayesState.prior1)}</span></label><input type="range" min="0.1" max="20" step="0.1" value={bayesState.prior1} onChange={(e) => updateBayesState('prior1', parseFloat(e.target.value))} className="w-full mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Rate (β)</span> <span>{fmt(bayesState.prior2)}</span></label><input type="range" min="0.1" max="10" step="0.1" value={bayesState.prior2} onChange={(e) => updateBayesState('prior2', parseFloat(e.target.value))} className="w-full" /></> )}
-                        {bayesState.type === 'normal-normal' && ( <><label className="text-sm text-gray-400 flex justify-between"><span>Prior Mean (μ₀)</span> <span>{fmt(bayesState.prior1)}</span></label><input type="range" min="-5" max="10" step="0.5" value={bayesState.prior1} onChange={(e) => updateBayesState('prior1', parseFloat(e.target.value))} className="w-full mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Prior Std Dev (σ₀)</span> <span>{fmt(bayesState.prior2)}</span></label><input type="range" min="0.1" max="5" step="0.1" value={bayesState.prior2} onChange={(e) => updateBayesState('prior2', parseFloat(e.target.value))} className="w-full" /></> )}
+                        {['gamma-poisson', 'gamma-exponential'].includes(bayesState.type) && ( <><label className="text-sm text-gray-400 flex justify-between"><span>Shape (α)</span> <span>{fmt(bayesState.prior1)}</span></label><input type="range" min="0.1" max="20" step="0.1" value={bayesState.prior1} onChange={(e) => updateBayesState('prior1', e.target.value)} className="w-full mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Rate (β)</span> <span>{fmt(bayesState.prior2)}</span></label><input type="range" min="0.1" max="10" step="0.1" value={bayesState.prior2} onChange={(e) => updateBayesState('prior2', e.target.value)} className="w-full" /></> )}
+                        {bayesState.type === 'normal-normal' && ( <><label className="text-sm text-gray-400 flex justify-between"><span>Prior Mean (μ₀)</span> <span>{fmt(bayesState.prior1)}</span></label><input type="range" min="-5" max="10" step="0.5" value={bayesState.prior1} onChange={(e) => updateBayesState('prior1', e.target.value)} className="w-full mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Prior Std Dev (σ₀)</span> <span>{fmt(bayesState.prior2)}</span></label><input type="range" min="0.1" max="5" step="0.1" value={bayesState.prior2} onChange={(e) => updateBayesState('prior2', e.target.value)} className="w-full" /></> )}
                       </div>
 
                       <div className="bg-gray-800 p-4 rounded-lg border-l-4 border-amber-500">
                         <h3 className="font-bold mb-2 text-amber-400">2. Observed Data</h3>
-                        {['beta-binomial', 'jeffreys-binomial'].includes(bayesState.type) && ( <><label className="text-sm text-gray-400 flex justify-between"><span>Trials (n)</span> <span>{fmt(bayesState.data1)}</span></label><input type="range" min="1" max="50" step="1" value={bayesState.data1} onChange={(e) => updateBayesState('data1', parseInt(e.target.value))} className="w-full accent-amber-500 mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Successes (k)</span> <span>{fmt(bayesState.data2)}</span></label><input type="range" min="0" max={bayesState.data1} step="1" value={bayesState.data2} onChange={(e) => updateBayesState('data2', parseInt(e.target.value))} className="w-full accent-amber-500" /></> )}
-                        {bayesState.type === 'gamma-poisson' && ( <><label className="text-sm text-gray-400 flex justify-between"><span>Periods (n)</span> <span>{fmt(bayesState.data1)}</span></label><input type="range" min="1" max="30" step="1" value={bayesState.data1} onChange={(e) => updateBayesState('data1', parseInt(e.target.value))} className="w-full accent-amber-500 mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Events (Σx)</span> <span>{fmt(bayesState.data2)}</span></label><input type="range" min="0" max="100" step="1" value={bayesState.data2} onChange={(e) => updateBayesState('data2', parseInt(e.target.value))} className="w-full accent-amber-500" /></> )}
-                        {bayesState.type === 'gamma-exponential' && ( <><label className="text-sm text-gray-400 flex justify-between"><span>Observations (n)</span> <span>{fmt(bayesState.data1)}</span></label><input type="range" min="1" max="30" step="1" value={bayesState.data1} onChange={(e) => updateBayesState('data1', parseInt(e.target.value))} className="w-full accent-amber-500 mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Sum of Waiting Times (Σx)</span> <span>{fmt(bayesState.data2)}</span></label><input type="range" min="0" max="100" step="1" value={bayesState.data2} onChange={(e) => updateBayesState('data2', parseInt(e.target.value))} className="w-full accent-amber-500" /></> )}
-                        {bayesState.type === 'normal-normal' && ( <><label className="text-sm text-gray-400 flex justify-between"><span>Sample Size (n)</span> <span>{fmt(bayesState.data1)}</span></label><input type="range" min="1" max="50" step="1" value={bayesState.data1} onChange={(e) => updateBayesState('data1', parseInt(e.target.value))} className="w-full accent-amber-500 mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Sample Mean (x̄)</span> <span>{fmt(bayesState.data2)}</span></label><input type="range" min="-5" max="10" step="0.5" value={bayesState.data2} onChange={(e) => updateBayesState('data2', parseFloat(e.target.value))} className="w-full accent-amber-500 mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Known Pop. Std (σ)</span> <span>{fmt(bayesState.data3)}</span></label><input type="range" min="0.1" max="5" step="0.1" value={bayesState.data3} onChange={(e) => updateBayesState('data3', parseFloat(e.target.value))} className="w-full accent-amber-500" /></> )}
+                        {['beta-binomial', 'jeffreys-binomial'].includes(bayesState.type) && ( <><label className="text-sm text-gray-400 flex justify-between"><span>Trials (n)</span> <span>{fmt(bayesState.data1)}</span></label><input type="range" min="1" max="50" step="1" value={bayesState.data1} onChange={(e) => updateBayesState('data1', e.target.value)} className="w-full accent-amber-500 mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Successes (k)</span> <span>{fmt(bayesState.data2)}</span></label><input type="range" min="0" max={bayesState.data1} step="1" value={bayesState.data2} onChange={(e) => updateBayesState('data2', e.target.value)} className="w-full accent-amber-500" /></> )}
+                        {bayesState.type === 'gamma-poisson' && ( <><label className="text-sm text-gray-400 flex justify-between"><span>Periods (n)</span> <span>{fmt(bayesState.data1)}</span></label><input type="range" min="1" max="30" step="1" value={bayesState.data1} onChange={(e) => updateBayesState('data1', e.target.value)} className="w-full accent-amber-500 mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Events (Σx)</span> <span>{fmt(bayesState.data2)}</span></label><input type="range" min="0" max="100" step="1" value={bayesState.data2} onChange={(e) => updateBayesState('data2', e.target.value)} className="w-full accent-amber-500" /></> )}
+                        {bayesState.type === 'gamma-exponential' && ( <><label className="text-sm text-gray-400 flex justify-between"><span>Observations (n)</span> <span>{fmt(bayesState.data1)}</span></label><input type="range" min="1" max="30" step="1" value={bayesState.data1} onChange={(e) => updateBayesState('data1', e.target.value)} className="w-full accent-amber-500 mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Sum of Waiting Times (Σx)</span> <span>{fmt(bayesState.data2)}</span></label><input type="range" min="0" max="100" step="1" value={bayesState.data2} onChange={(e) => updateBayesState('data2', e.target.value)} className="w-full accent-amber-500" /></> )}
+                        {bayesState.type === 'normal-normal' && ( <><label className="text-sm text-gray-400 flex justify-between"><span>Sample Size (n)</span> <span>{fmt(bayesState.data1)}</span></label><input type="range" min="1" max="50" step="1" value={bayesState.data1} onChange={(e) => updateBayesState('data1', e.target.value)} className="w-full accent-amber-500 mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Sample Mean (x̄)</span> <span>{fmt(bayesState.data2)}</span></label><input type="range" min="-5" max="10" step="0.5" value={bayesState.data2} onChange={(e) => updateBayesState('data2', e.target.value)} className="w-full accent-amber-500 mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Known Pop. Std (σ)</span> <span>{fmt(bayesState.data3)}</span></label><input type="range" min="0.1" max="5" step="0.1" value={bayesState.data3} onChange={(e) => updateBayesState('data3', e.target.value)} className="w-full accent-amber-500" /></> )}
                       </div>
                     </div>
                   </div>
                 )}
                 
-                {activeTab !== 'inference' && <EquationsTable />}
+                <EquationsTable distsToRender={activeTab === 'bayesian' ? bayesianAnalysis.curves : distributions} />
               </div>
             </div>
           );
