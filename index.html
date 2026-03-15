@@ -29,7 +29,7 @@
     <script type="text/babel">
         const { useState, useMemo, useEffect } = React;
 
-        // --- Math Utilities ---
+        // --- Basic Math Utilities ---
         const gamma = (z) => {
           let g = 7;
           let p = [0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
@@ -51,6 +51,25 @@
           let c = 1; for (let i = 1; i <= k; i++) c = (c * (n - i + 1)) / i; return c;
         };
         const fmt = (v) => (isNaN(v) || v === null || v === undefined || v === '') ? 'N/A' : parseFloat(Number(v).toFixed(4)).toString();
+
+        const inverseNormalCDF = (p) => {
+            const a1 = -39.6968302866538, a2 = 220.946098424521, a3 = -275.928510446969, a4 = 138.357751867269, a5 = -30.6647980661472, a6 = 2.50662827745924;
+            const b1 = -54.4760987982241, b2 = 161.585836858041, b3 = -155.698979859887, b4 = 66.8013118877197, b5 = -13.2806815528857;
+            const c1 = -0.00778489400243029, c2 = -0.322396458041136, c3 = -2.40075827716184, c4 = -2.54973253934373, c5 = 4.37466414146497, c6 = 2.93816398269878;
+            const d1 = 0.00778469570904146, d2 = 0.32246712907004, d3 = 2.445134137143, d4 = 3.75440866190742;
+            const p_low = 0.02425, p_high = 1 - p_low;
+            let q, r;
+            if (p < p_low) {
+                q = Math.sqrt(-2 * Math.log(p));
+                return (((((c1 * q + c2) * q + c3) * q + c4) * q + c5) * q + c6) / ((((d1 * q + d2) * q + d3) * q + d4) * q + 1);
+            } else if (p <= p_high) {
+                q = p - 0.5; r = q * q;
+                return (((((a1 * r + a2) * r + a3) * r + a4) * r + a5) * r + a6) * q / (((((b1 * r + b2) * r + b3) * r + b4) * r + b5) * r + 1);
+            } else {
+                q = Math.sqrt(-2 * Math.log(1 - p));
+                return -(((((c1 * q + c2) * q + c3) * q + c4) * q + c5) * q + c6) / ((((d1 * q + d2) * q + d3) * q + d4) * q + 1);
+            }
+        };
 
         // --- Continuous PDFs ---
         const normalPDF = (x, mu, sigma) => (1 / (sigma * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * Math.pow((x - mu) / sigma, 2));
@@ -114,10 +133,238 @@
         const getZScore = (ci) => ci === 0.90 ? 1.645 : ci === 0.95 ? 1.960 : ci === 0.99 ? 2.576 : 1.96;
         const getTCrit = (ci, df) => {
           const z = getZScore(ci);
-          return df > 100 ? z : z * (1 + (z*z + 1)/(4*df)); // Cornish-Fisher approx
+          return df > 100 ? z : z * (1 + (z*z + 1)/(4*df));
         };
 
-        // --- Encyclopedia (English) ---
+        // --- Advanced Regression Engine ---
+        // Added multiple regression types, dynamic CI bounds, and normality tests
+        const calculateAdvancedRegression = (points, type, ciLevel) => {
+            if (points.length < 3) return null;
+            
+            // Filter invalid points based on regression type
+            let pts = points;
+            if (type === 'exponential') pts = points.filter(p => p.y > 0);
+            if (type === 'logarithmic') pts = points.filter(p => p.x > 0);
+            const n = pts.length;
+            if (n < 3) return null;
+
+            const sumX = pts.reduce((s, p) => s + p.x, 0);
+            const sumY = pts.reduce((s, p) => s + p.y, 0);
+            const meanX = sumX / n;
+            const meanY = sumY / n;
+
+            let predict = (x) => 0;
+            let getCI = (x, tCrit, mse) => ({ lower: 0, upper: 0 });
+            let equation = '';
+            let rSquared = 0, mse = 0, sse = 0, sst = 0;
+            const residuals = [];
+
+            if (type === 'linear') {
+                const sumXY = pts.reduce((s, p) => s + p.x * p.y, 0);
+                const sumX2 = pts.reduce((s, p) => s + p.x * p.x, 0);
+                const ssX = sumX2 - n * meanX * meanX;
+                const slope = ssX === 0 ? 0 : (sumXY - n * meanX * meanY) / ssX;
+                const intercept = meanY - slope * meanX;
+                predict = (x) => slope * x + intercept;
+                equation = `Y = ${slope.toFixed(3)} X ${intercept >= 0 ? '+' : '-'} ${Math.abs(intercept).toFixed(3)}`;
+                getCI = (x, tC, m) => {
+                    const seFit = Math.sqrt(m * (1/n + Math.pow(x - meanX, 2) / Math.max(0.0001, ssX)));
+                    const yP = predict(x);
+                    return { lower: yP - tC * seFit, upper: yP + tC * seFit };
+                };
+            } 
+            else if (type === 'logarithmic') {
+                const sumLnX = pts.reduce((s, p) => s + Math.log(p.x), 0);
+                const meanLnX = sumLnX / n;
+                const sumLnXY = pts.reduce((s, p) => s + Math.log(p.x) * p.y, 0);
+                const sumLnX2 = pts.reduce((s, p) => s + Math.pow(Math.log(p.x), 2), 0);
+                const ssLnX = sumLnX2 - n * meanLnX * meanLnX;
+                const b = ssLnX === 0 ? 0 : (sumLnXY - n * meanLnX * meanY) / ssLnX;
+                const a = meanY - b * meanLnX;
+                predict = (x) => x > 0 ? a + b * Math.log(x) : 0;
+                equation = `Y = ${a.toFixed(3)} ${b >= 0 ? '+' : '-'} ${Math.abs(b).toFixed(3)} ln(X)`;
+                getCI = (x, tC, m) => {
+                    if(x <= 0) return { lower: 0, upper: 0 };
+                    const seFit = Math.sqrt(m * (1/n + Math.pow(Math.log(x) - meanLnX, 2) / Math.max(0.0001, ssLnX)));
+                    const yP = predict(x);
+                    return { lower: yP - tC * seFit, upper: yP + tC * seFit };
+                };
+            } 
+            else if (type === 'exponential') {
+                const sumLnY = pts.reduce((s, p) => s + Math.log(p.y), 0);
+                const meanLnY = sumLnY / n;
+                const sumXLnY = pts.reduce((s, p) => s + p.x * Math.log(p.y), 0);
+                const sumX2 = pts.reduce((s, p) => s + p.x * p.x, 0);
+                const ssX = sumX2 - n * meanX * meanX;
+                const b = ssX === 0 ? 0 : (sumXLnY - n * meanX * meanLnY) / ssX;
+                const lnA = meanLnY - b * meanX;
+                const a = Math.exp(lnA);
+                predict = (x) => a * Math.exp(b * x);
+                equation = `Y = ${a.toFixed(3)} e^(${b.toFixed(3)} X)`;
+                getCI = (x, tC, mLog) => {
+                    const seFitLog = Math.sqrt(mLog * (1/n + Math.pow(x - meanX, 2) / Math.max(0.0001, ssX)));
+                    const logYPred = lnA + b * x;
+                    return { lower: Math.exp(logYPred - tC * seFitLog), upper: Math.exp(logYPred + tC * seFitLog) };
+                };
+            } 
+            else if (type === 'quadratic') {
+                let sX = 0, sX2 = 0, sX3 = 0, sX4 = 0, sY = 0, sXY = 0, sX2Y = 0;
+                pts.forEach(p => {
+                    const x2 = p.x * p.x;
+                    sX += p.x; sX2 += x2; sX3 += x2 * p.x; sX4 += x2 * x2;
+                    sY += p.y; sXY += p.x * p.y; sX2Y += x2 * p.y;
+                });
+                const A = [[n, sX, sX2], [sX, sX2, sX3], [sX2, sX3, sX4]];
+                const B = [sY, sXY, sX2Y];
+                const det3 = (M) => M[0][0]*(M[1][1]*M[2][2]-M[1][2]*M[2][1]) - M[0][1]*(M[1][0]*M[2][2]-M[1][2]*M[2][0]) + M[0][2]*(M[1][0]*M[2][1]-M[1][1]*M[2][0]);
+                const D = det3(A);
+                const replaceCol = (M, col, V) => M.map((row, i) => row.map((val, j) => j===col ? V[i] : val));
+                let c=0, b=0, a=0;
+                if(D !== 0) {
+                    c = det3(replaceCol(A, 0, B))/D;
+                    b = det3(replaceCol(A, 1, B))/D;
+                    a = det3(replaceCol(A, 2, B))/D;
+                }
+                predict = (x) => a*x*x + b*x + c;
+                equation = `Y = ${a.toFixed(3)} X² ${b >= 0 ? '+' : '-'} ${Math.abs(b).toFixed(3)} X ${c >= 0 ? '+' : '-'} ${Math.abs(c).toFixed(3)}`;
+                getCI = (x, tC, m) => {
+                    const seFit = Math.sqrt(m * (3/n)); // Approximation for quadratic band visualization
+                    const yP = predict(x);
+                    return { lower: yP - tC * seFit, upper: yP + tC * seFit };
+                };
+            }
+
+            let mseLog = 0;
+            if (type === 'exponential') {
+                let sseLog = 0;
+                pts.forEach(p => {
+                    const yP = predict(p.x);
+                    residuals.push({ x: p.x, y: p.y - yP, actualY: p.y });
+                    sse += Math.pow(p.y - yP, 2);
+                    sst += Math.pow(p.y - meanY, 2);
+                    sseLog += Math.pow(Math.log(p.y) - Math.log(yP), 2);
+                });
+                mseLog = sseLog / Math.max(1, n - 2);
+            } else {
+                pts.forEach(p => {
+                    const yP = predict(p.x);
+                    residuals.push({ x: p.x, y: p.y - yP, actualY: p.y });
+                    sse += Math.pow(p.y - yP, 2);
+                    sst += Math.pow(p.y - meanY, 2);
+                });
+            }
+            
+            rSquared = sst === 0 ? 1 : Math.max(0, 1 - (sse / sst));
+            mse = sse / Math.max(1, n - (type === 'quadratic' ? 3 : 2));
+            const df = Math.max(1, n - (type === 'quadratic' ? 3 : 2));
+            const tCrit = getTCrit(ciLevel, df);
+
+            // --- Normality Test (Ryan-Joiner proxy for Shapiro-Wilk) ---
+            const sortedRes = [...residuals].map(r => r.y).sort((a,b) => a - b);
+            const qqPoints = sortedRes.map((res, i) => {
+                const z = inverseNormalCDF((i + 1 - 0.375) / (n + 0.25));
+                return { z, res };
+            });
+            const meanZ = qqPoints.reduce((s, p) => s + p.z, 0) / n;
+            const meanR = qqPoints.reduce((s, p) => s + p.res, 0) / n;
+            let sumZr = 0, sumZ2 = 0, sumR2 = 0;
+            qqPoints.forEach(p => {
+                sumZr += (p.z - meanZ) * (p.res - meanR);
+                sumZ2 += Math.pow(p.z - meanZ, 2);
+                sumR2 += Math.pow(p.res - meanR, 2);
+            });
+            const rjCorrel = (sumZ2 > 0 && sumR2 > 0) ? sumZr / Math.sqrt(sumZ2 * sumR2) : 0;
+            
+            // Critical value approximation
+            const isNormal = rjCorrel > (1.0063 - 0.1288 / Math.sqrt(n) - 0.6118 / n + 1.3505 / (n * n)); 
+
+            return { 
+                type, predict, equation, rSquared, mse, residuals, sse, sst, n, 
+                getCI: (x) => getCI(x, tCrit, type === 'exponential' ? mseLog : mse), 
+                qqPoints, rjCorrel, isNormal, stdRes: Math.sqrt(mse)
+            };
+        };
+
+        // --- Random Data Generation ---
+        const randNormal = (mu, sigma) => {
+            let u = 0, v = 0; while(u === 0) u = Math.random(); while(v === 0) v = Math.random();
+            return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v) * sigma + mu;
+        };
+        
+        const randomFromDist = (type, p) => {
+            const u = Math.random();
+            switch (type) {
+                case 'normal': return randNormal(p.mu, p.sigma);
+                case 'uniform': return p.a + u * (p.b - p.a);
+                case 'exponential': return -Math.log(1 - u) / Math.max(0.001, p.lambda);
+                case 'laplace': return p.mu - p.b * Math.sign(u - 0.5) * Math.log(1 - 2 * Math.abs(u - 0.5));
+                case 'cauchy': return p.x0 + p.gammaVal * Math.tan(Math.PI * (u - 0.5));
+                case 'lognormal': return Math.exp(randNormal(p.mu, p.sigma));
+                case 'weibull': return p.lambda * Math.pow(-Math.log(1 - u), 1 / Math.max(0.001, p.k));
+                case 'pareto': return p.xm / Math.pow(1 - u, 1 / Math.max(0.001, p.alpha));
+                case 'logistic': return p.mu + p.s * Math.log(u / (1 - u));
+                case 'rayleigh': return p.sigma * Math.sqrt(-2 * Math.log(1 - u));
+                case 'bernoulli': return u < p.p ? 1 : 0;
+                case 'binomial': { let succ = 0; for(let i=0; i<p.n; i++) if(Math.random()<p.p) succ++; return succ; }
+                case 'poisson': { let L = Math.exp(-p.lambda), k = 0, prob = 1; do { k++; prob *= Math.random(); } while (prob > L); return k - 1; }
+                case 'geometric': return Math.ceil(Math.log(1 - u) / Math.log(1 - Math.min(0.999, p.p)));
+                case 'negative_binomial': { let succ = 0, fails = 0; while(succ < p.r) { if(Math.random() < p.p) succ++; else fails++; } return fails + p.r; }
+                case 'discrete_uniform': return Math.floor(p.a + u * (p.b - p.a + 1));
+                case 'beta': { 
+                   let x, y; const M = 5; 
+                   do { x = Math.random(); y = Math.random() * M; } while(y > betaPDF(x, p.alpha, p.beta)); 
+                   return x; 
+                }
+                case 'gamma': {
+                   const mean = p.alpha / p.beta; const peakX = Math.max(0, (p.alpha - 1) / p.beta);
+                   const M = gammaPDF(peakX === 0 ? 0.01 : peakX, p.alpha, p.beta) * 2;
+                   let rx, ry; do { rx = Math.random() * mean * 5; ry = Math.random() * M; } while(ry > gammaPDF(rx, p.alpha, p.beta));
+                   return rx;
+                }
+                case 'chisquare': { let sum = 0; for(let i=0; i<p.k; i++) { const z = randNormal(0,1); sum += z*z; } return sum; }
+                case 'student_t': { let sum = 0; for(let i=0; i<p.nu; i++) { const z = randNormal(0,1); sum += z*z; } return randNormal(0,1) / Math.sqrt(sum / p.nu); }
+                case 'f_dist': { 
+                   let sum1 = 0; for(let i=0; i<p.d1; i++) { const z = randNormal(0,1); sum1 += z*z; }
+                   let sum2 = 0; for(let i=0; i<p.d2; i++) { const z = randNormal(0,1); sum2 += z*z; }
+                   return (sum1 / p.d1) / (sum2 / p.d2);
+                }
+                case 'hypergeometric': {
+                   let N = p.N, K = p.K, succ = 0;
+                   for(let i=0; i<p.n; i++) { if(Math.random() < K/N) { succ++; K--; } N--; }
+                   return succ;
+                }
+                default: return randNormal(0, 1);
+            }
+        };
+
+        const getDistStats = (type, p) => {
+            switch(type) {
+                case 'normal': return { mean: p.mu, var: p.sigma * p.sigma };
+                case 'uniform': return { mean: (p.a + p.b)/2, var: Math.pow(p.b - p.a, 2)/12 };
+                case 'exponential': return { mean: 1/p.lambda, var: 1/(p.lambda*p.lambda) };
+                case 'poisson': return { mean: p.lambda, var: p.lambda };
+                case 'binomial': return { mean: p.n * p.p, var: p.n * p.p * (1 - p.p) };
+                case 'beta': return { mean: p.alpha/(p.alpha+p.beta), var: (p.alpha*p.beta)/(Math.pow(p.alpha+p.beta, 2)*(p.alpha+p.beta+1)) };
+                case 'gamma': return { mean: p.alpha / p.beta, var: p.alpha / (p.beta * p.beta) };
+                case 'chisquare': return { mean: p.k, var: 2 * p.k };
+                case 'student_t': return { mean: 0, var: p.nu > 2 ? p.nu / (p.nu - 2) : Infinity };
+                case 'laplace': return { mean: p.mu, var: 2 * p.b * p.b };
+                case 'cauchy': return { mean: NaN, var: NaN }; 
+                case 'lognormal': return { mean: Math.exp(p.mu + p.sigma*p.sigma/2), var: (Math.exp(p.sigma*p.sigma)-1)*Math.exp(2*p.mu + p.sigma*p.sigma) };
+                case 'weibull': return { mean: p.lambda * gamma(1 + 1/p.k), var: p.lambda*p.lambda * (gamma(1 + 2/p.k) - Math.pow(gamma(1 + 1/p.k), 2)) };
+                case 'pareto': return { mean: p.alpha > 1 ? (p.alpha * p.xm)/(p.alpha - 1) : Infinity, var: p.alpha > 2 ? (p.xm*p.xm * p.alpha) / (Math.pow(p.alpha-1, 2)*(p.alpha-2)) : Infinity };
+                case 'logistic': return { mean: p.mu, var: (p.s*p.s * Math.PI*Math.PI)/3 };
+                case 'rayleigh': return { mean: p.sigma * Math.sqrt(Math.PI/2), var: ((4-Math.PI)/2)*p.sigma*p.sigma };
+                case 'bernoulli': return { mean: p.p, var: p.p*(1-p.p) };
+                case 'geometric': return { mean: 1/p.p, var: (1-p.p)/(p.p*p.p) };
+                case 'negative_binomial': return { mean: p.r/p.p, var: (p.r*(1-p.p))/(p.p*p.p) };
+                case 'discrete_uniform': return { mean: (p.a+p.b)/2, var: ((p.b-p.a+1)*(p.b-p.a+1)-1)/12 };
+                case 'hypergeometric': return { mean: p.n * (p.K/p.N), var: p.n * (p.K/p.N) * ((p.N-p.K)/p.N) * ((p.N-p.n)/(p.N-1)) };
+                case 'f_dist': return { mean: p.d2 > 2 ? p.d2/(p.d2-2) : Infinity, var: p.d2 > 4 ? (2*p.d2*p.d2*(p.d1+p.d2-2))/(p.d1*Math.pow(p.d2-2, 2)*(p.d2-4)) : Infinity };
+                default: return { mean: 0, var: 1 };
+            }
+        };
+
         const DIST_INFO = {
           normal: { name: "Normal (Gaussian)", desc: "The most important continuous distribution in statistics, describing symmetrical, bell-shaped data.", params: "Mean (μ), Standard Deviation (σ).", formula: "f(x) = (1 / σ√(2π)) * exp(-0.5 * ((x-μ)/σ)²)", uses: "Heights, measurement errors.", notes: "Symmetric. Skewness and Excess Kurtosis are 0." },
           beta: { name: "Beta", desc: "Models random variables limited to intervals of 0 and 1.", params: "Shape parameters α and β.", formula: "f(x) ∝ x^(α-1) * (1-x)^(β-1)", uses: "Prior distribution for binomial proportions.", notes: "Uniform when α=1, β=1." },
@@ -148,16 +395,27 @@
           '1_sample_prop': { name: "1-Proportion Z-Test", desc: "Tests if a sample proportion differs from a hypothesized population proportion.", params: "Assumes sample follows a binomial distribution.", formula: "Z = (p̂ - p₀) / √(p₀(1-p₀)/n)", uses: "Click-through rates, defect rates.", notes: "Requires n*p > 10 and n*(1-p) > 10." },
           '2_sample_prop': { name: "2-Proportion Z-Test", desc: "Tests if two sample proportions differ.", params: "Uses a pooled proportion estimate (p̂_pool) under H0.", formula: "Z = (p̂₁ - p̂₂) / √(p̂_pool(1-p̂_pool)(1/n₁ + 1/n₂))", uses: "A/B testing conversion rates.", notes: "Large sample assumption applies." },
           'anova': { name: "One-Way ANOVA", desc: "Tests if means of 3+ independent groups are different.", params: "Assumes normality and equal variances.", formula: "F = MST / MSE", uses: "Comparing multiple groups.", notes: "Requires post-hoc tests if significant." },
+          'power_lab': { name: "Power & Errors Lab", desc: "Visualizes the tradeoff between Type I error (α), Type II error (β), and Statistical Power (1-β).", params: "Effect Size, Sample Size, Population Variance, Alpha level.", formula: "Power = P(Reject H0 | H1 is true)", uses: "Experimental design, Sample size calculation.", notes: "Lowering alpha increases beta. Increasing sample size reduces both." },
         };
         const TYPE_LABELS = { normal: 'Normal', beta: 'Beta', gamma: 'Gamma', exponential: 'Exponential', uniform: 'Uniform', laplace: 'Laplace', cauchy: 'Cauchy', lognormal: 'Log-Normal', weibull: 'Weibull', pareto: 'Pareto', logistic: 'Logistic', rayleigh: 'Rayleigh', binomial: 'Binomial', poisson: 'Poisson', bernoulli: 'Bernoulli', geometric: 'Geometric', negative_binomial: 'Neg Binomial', hypergeometric: 'Hypergeometric', discrete_uniform: 'Disc Uniform', student_t: "Student's t", f_dist: 'F-Dist', chisquare: 'Chi-Square' };
 
-        // --- Core Analytic Functions ---
         const generateChartData = (domainMin, domainMax, resolution, dists) => {
             const data = []; let maxY = 0; const step = (domainMax - domainMin) / resolution;
             dists.forEach(dist => {
               const points = []; const isDiscrete = isDiscreteDist(dist.type) || dist.type === 'likelihood_discrete';
-              const startX = isDiscrete ? Math.ceil(domainMin) : domainMin, endX = isDiscrete ? Math.floor(domainMax) : domainMax, xStep = isDiscrete ? 1 : step;
-              for (let x = startX; x <= endX; x += xStep) {
+              const startX = isDiscrete ? Math.ceil(domainMin) : domainMin;
+              const endX = isDiscrete ? Math.floor(domainMax) : domainMax;
+              const xStep = isDiscrete ? 1 : step;
+              const numSteps = isDiscrete ? Math.max(1, endX - startX) : resolution;
+              
+              for (let i = 0; i <= numSteps; i++) {
+                let x = startX + i * xStep;
+                
+                // Handle floating-point precision to hit bounds accurately preventing Jeffreys curve distortion
+                if (!isDiscrete) {
+                    x = parseFloat(x.toFixed(8));
+                }
+
                 let y = 0;
                 switch (dist.type) {
                   case 'normal': y = normalPDF(x, dist.params.mu, dist.params.sigma); break;
@@ -195,8 +453,6 @@
             return { data, maxY: maxY > 0 ? maxY * 1.15 : 1 }; 
         };
 
-        // --- Architecturally Isolated Components ---
-
         const Plotter = ({ chartData, domainMin, domainMax, xLabel, yConfig, showCI = false, credibleInterval = null, testPoint = null, testValue = null }) => {
           const width = 800, height = 400, padding = 50, innerWidth = width - padding * 2, innerHeight = height - padding * 2;
           const maxY = yConfig.auto ? chartData.maxY : yConfig.max, minY = yConfig.auto ? 0 : yConfig.min;
@@ -222,7 +478,6 @@
                 <text x={width / 2} y={height - 5} fill="#d1d5db" fontSize="14" textAnchor="middle">{xLabel}</text>
                 {yConfig.show && <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#6b7280" strokeWidth="2" />}
                 
-                {/* CI Rectangle isolated by props */}
                 {showCI && credibleInterval && ( 
                     <rect x={scaleX(credibleInterval[0])} y={padding} width={scaleX(credibleInterval[1]) - scaleX(credibleInterval[0])} height={innerHeight} fill="#10b981" opacity="0.1" /> 
                 )}
@@ -234,7 +489,6 @@
                   return <path key={`cont-${i}`} d={pathData} fill="none" stroke={dist.color} strokeWidth="3" strokeDasharray={dist.isDashed ? "5,5" : "none"} />;
                 })}
                 
-                {/* Test Point Circle isolated by props */}
                 {showCI && testPoint !== null && testValue !== null && (
                     <circle cx={scaleX(testPoint)} cy={scaleY(testValue)} r="6" fill="#ef4444" stroke="white" strokeWidth="2" />
                 )}
@@ -246,6 +500,151 @@
               </div>
             </div>
           );
+        };
+
+        const HistogramPlotter = ({ data, domainMin, domainMax, bins = 30, color = "#8b5cf6", title, overlayNormal = null }) => {
+            const width = 400, height = 250, padding = 40, innerWidth = width - padding * 2, innerHeight = height - padding * 2;
+            
+            const binnedData = useMemo(() => {
+                if (!data || data.length === 0) return { counts: [], maxCount: 1, step: 1 };
+                const step = (domainMax - domainMin) / bins;
+                const binCounts = new Array(bins).fill(0);
+                
+                data.forEach(val => {
+                    if (val >= domainMin && val <= domainMax) {
+                        let binIndex = Math.floor((val - domainMin) / step);
+                        if (binIndex >= bins) binIndex = bins - 1;
+                        if (binIndex >= 0) binCounts[binIndex]++;
+                    }
+                });
+                
+                const maxCount = Math.max(...binCounts);
+                return { counts: binCounts, maxCount: maxCount === 0 ? 1 : maxCount, step };
+            }, [data, domainMin, domainMax, bins]);
+
+            const scaleX = (val) => padding + ((val - domainMin) / (domainMax - domainMin)) * innerWidth;
+            const scaleY = (count) => height - padding - (count / binnedData.maxCount) * innerHeight;
+
+            const gridLines = [];
+            for (let i = 0; i <= 5; i++) {
+                const xVal = domainMin + (domainMax - domainMin) * (i / 5);
+                gridLines.push(<g key={`grid-x-${i}`}><line x1={scaleX(xVal)} y1={padding} x2={scaleX(xVal)} y2={height - padding} stroke="#374151" strokeDasharray="2,2" /><text x={scaleX(xVal)} y={height - padding + 15} fill="#9ca3af" fontSize="10" textAnchor="middle">{fmt(xVal)}</text></g>);
+            }
+
+            let normalPath = "";
+            if (overlayNormal && overlayNormal.show && !isNaN(overlayNormal.mean) && overlayNormal.se > 0 && overlayNormal.se !== Infinity) {
+                const pathPoints = [];
+                for (let i = 0; i <= 100; i++) {
+                    const xVal = domainMin + (domainMax - domainMin) * (i / 100);
+                    const pdfVal = normalPDF(xVal, overlayNormal.mean, overlayNormal.se);
+                    const scaledY = pdfVal * data.length * binnedData.step;
+                    pathPoints.push({ x: xVal, y: scaledY });
+                }
+                normalPath = pathPoints.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${scaleX(p.x)} ${scaleY(p.y)}`).join(' ');
+            }
+
+            return (
+                <div className="relative w-full overflow-hidden bg-gray-950 rounded-xl border border-gray-800 shadow-inner p-2">
+                    <div className="absolute top-2 left-4 text-xs font-bold text-gray-300">{title}</div>
+                    {overlayNormal && overlayNormal.show && (
+                        <div className="absolute top-2 right-4 flex items-center gap-1 text-[10px] text-red-400">
+                            <span className="w-3 h-0.5 bg-red-400 border-b border-dashed border-red-400"></span>
+                            Theoretical Normal
+                        </div>
+                    )}
+                    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto mt-4">
+                        {gridLines}
+                        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#6b7280" strokeWidth="2" />
+                        
+                        {binnedData.counts.map((count, i) => {
+                            if (count === 0) return null;
+                            const x = scaleX(domainMin + i * binnedData.step);
+                            const w = Math.max(1, (innerWidth / bins) * 0.9);
+                            const y = scaleY(count);
+                            const h = height - padding - y;
+                            return <rect key={i} x={x} y={y} width={w} height={h} fill={color} opacity="0.8" stroke={color} strokeWidth="1" className="transition-all duration-300" />;
+                        })}
+
+                        {overlayNormal && overlayNormal.show && normalPath && (
+                            <path d={normalPath} fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray="4,4" className="transition-all duration-300" />
+                        )}
+                    </svg>
+                </div>
+            );
+        };
+
+        const PowerPlotter = ({ mu0, muA, sigma, n, alphaLevel }) => {
+            const width = 800, height = 350, padding = 50, innerWidth = width - padding * 2, innerHeight = height - padding * 2;
+            const se = sigma / Math.sqrt(n);
+            const zCrit = inverseNormalCDF(1 - alphaLevel);
+            const xCrit = mu0 + zCrit * se;
+
+            const domainMin = Math.min(mu0, muA) - 4 * se;
+            const domainMax = Math.max(mu0, muA) + 4 * se;
+
+            const scaleX = (x) => padding + ((x - domainMin) / (domainMax - domainMin)) * innerWidth;
+            const maxY = normalPDF(mu0, mu0, se) * 1.1; 
+            const scaleY = (y) => height - padding - (y / maxY) * innerHeight;
+
+            const h0Points = [], haPoints = [];
+            const steps = 300;
+            const stepSize = (domainMax - domainMin) / steps;
+            
+            let alphaPathD = `M ${scaleX(xCrit)} ${scaleY(0)} `;
+            let betaPathD = `M ${scaleX(domainMin)} ${scaleY(0)} `;
+            let powerPathD = `M ${scaleX(xCrit)} ${scaleY(0)} `;
+
+            for (let i = 0; i <= steps; i++) {
+                const x = domainMin + i * stepSize;
+                const y0 = normalPDF(x, mu0, se);
+                const yA = normalPDF(x, muA, se);
+                
+                const sx = scaleX(x);
+                h0Points.push({ x: sx, y: scaleY(y0) });
+                haPoints.push({ x: sx, y: scaleY(yA) });
+
+                if (x >= xCrit) {
+                    alphaPathD += `L ${sx} ${scaleY(y0)} `;
+                    powerPathD += `L ${sx} ${scaleY(yA)} `;
+                }
+                if (x <= xCrit) {
+                    betaPathD += `L ${sx} ${scaleY(yA)} `;
+                }
+            }
+
+            alphaPathD += `L ${scaleX(domainMax)} ${scaleY(0)} Z`;
+            betaPathD += `L ${scaleX(xCrit)} ${scaleY(0)} Z`;
+            powerPathD += `L ${scaleX(domainMax)} ${scaleY(0)} Z`;
+
+            const h0PathStr = h0Points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+            const haPathStr = haPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+
+            return (
+                <div className="relative w-full overflow-hidden bg-gray-900 rounded-xl border border-indigo-500/30 shadow-2xl p-4">
+                    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
+                        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#6b7280" strokeWidth="2" />
+                        <text x={width / 2} y={height - 10} fill="#d1d5db" fontSize="14" textAnchor="middle">Sample Mean (X̄)</text>
+
+                        <path d={powerPathD} fill="#10b981" opacity="0.3" /> 
+                        <path d={betaPathD} fill="#f59e0b" opacity="0.4" />  
+                        <path d={alphaPathD} fill="#ef4444" opacity="0.6" /> 
+
+                        <path d={h0PathStr} fill="none" stroke="#9ca3af" strokeWidth="3" strokeDasharray="5,5" />
+                        <path d={haPathStr} fill="none" stroke="#3b82f6" strokeWidth="3" />
+
+                        <line x1={scaleX(xCrit)} y1={padding} x2={scaleX(xCrit)} y2={height - padding} stroke="#ef4444" strokeWidth="2" />
+                        <text x={scaleX(xCrit) + 5} y={padding + 10} fill="#ef4444" fontSize="12" fontWeight="bold">Critical Threshold</text>
+                    </svg>
+
+                    <div className="absolute top-4 right-4 bg-gray-800/90 p-3 rounded-lg border border-gray-700 backdrop-blur-sm text-sm">
+                        <div className="flex items-center gap-2 mb-1"><div className="w-4 h-1 border-b-2 border-dashed border-gray-400"></div><span className="text-gray-300">H₀ Dist (Null)</span></div>
+                        <div className="flex items-center gap-2 mb-2"><div className="w-4 h-1 bg-blue-500"></div><span className="text-gray-300">H₁ Dist (Alternative)</span></div>
+                        <div className="flex items-center gap-2"><div className="w-3 h-3 bg-red-500 opacity-60"></div><span className="text-red-300">Alpha α (Type I)</span></div>
+                        <div className="flex items-center gap-2"><div className="w-3 h-3 bg-amber-500 opacity-60"></div><span className="text-amber-300">Beta β (Type II)</span></div>
+                        <div className="flex items-center gap-2"><div className="w-3 h-3 bg-emerald-500 opacity-40"></div><span className="text-emerald-300">Power (1 - β)</span></div>
+                    </div>
+                </div>
+            );
         };
 
         const ScatterPlot = ({ scatterPlotData, inferenceSamples }) => {
@@ -340,7 +739,7 @@
 
         // --- Main Application ---
         function App() {
-          const [activeTab, setActiveTab] = useState('explorer');
+          const [activeTab, setActiveTab] = useState('regression'); 
           const [infoModal, setInfoModal] = useState(null);
           
           // --- States ---
@@ -368,7 +767,32 @@
             hypoMean: 100, knownVar1: 15, knownVar2: 15, tails: 'two', ciLevel: 0.95
           });
 
-          // --- Handlers ---
+          const [cltState, setCltState] = useState({
+              dist: { id: 99, type: 'exponential', params: { lambda: 1 } },
+              sampleSize: 30, numSamples: 1000, popData: [], sampleMeans: [], theoreticalMean: 0, theoreticalSE: 0, empiricalMean: 0, empiricalSE: 0, isAnimating: false, progress: 0
+          });
+
+          const [powerState, setPowerState] = useState({
+              mu0: 100, muA: 105, sigma: 15, n: 30, alpha: 0.05
+          });
+
+          // --- Advanced Regression Lab State ---
+          const [regConfig, setRegConfig] = useState({
+              type: 'linear', 
+              ciLevel: 0.95,
+              showCI: true,
+              diagView: 'residuals',
+              xMin: 0, xMax: 10, yMin: 0, yMax: 15
+          });
+
+          const [regressionPoints, setRegressionPoints] = useState([
+              { id: 1, x: 1, y: 2 }, { id: 2, x: 2, y: 4 }, { id: 3, x: 3, y: 5 },
+              { id: 4, x: 4, y: 4 }, { id: 5, x: 5, y: 7 }, { id: 6, x: 6, y: 8 },
+              { id: 7, x: 7, y: 7 }, { id: 8, x: 8, y: 9 }, { id: 9, x: 9, y: 11 }
+          ]);
+          const [draggingPoint, setDraggingPoint] = useState(null);
+
+          // --- General Data Handlers ---
           const addDistribution = () => {
             if (distributions.length >= 6) return;
             const newId = distributions.length > 0 ? Math.max(...distributions.map(d => d.id)) + 1 : 1;
@@ -378,35 +802,35 @@
           
           const removeDistribution = (id) => setDistributions(distributions.filter(d => d.id !== id));
           
+          const getParamsForType = (newType) => {
+              switch (newType) {
+                  case 'normal': return { mu: 0, sigma: 1 };
+                  case 'beta': case 'gamma': return { alpha: 2, beta: 2 };
+                  case 'exponential': return { lambda: 1 };
+                  case 'uniform': return { a: -2, b: 2 };
+                  case 'laplace': return { mu: 0, b: 1 };
+                  case 'cauchy': return { x0: 0, gammaVal: 1 };
+                  case 'lognormal': return { mu: 0, sigma: 1 };
+                  case 'weibull': return { k: 1.5, lambda: 1 };
+                  case 'pareto': return { xm: 1, alpha: 3 };
+                  case 'logistic': return { mu: 0, s: 1 };
+                  case 'rayleigh': return { sigma: 1 };
+                  case 'binomial': return { n: 10, p: 0.5 };
+                  case 'poisson': return { lambda: 4 };
+                  case 'bernoulli': case 'geometric': return { p: 0.5 };
+                  case 'negative_binomial': return { r: 3, p: 0.5 };
+                  case 'hypergeometric': return { N: 50, K: 10, n: 10 };
+                  case 'discrete_uniform': return { a: 1, b: 6 };
+                  case 'student_t': return { nu: 5 };
+                  case 'f_dist': return { d1: 5, d2: 5 };
+                  case 'chisquare': return { k: 5 };
+                  default: return { mu: 0, sigma: 1 };
+              }
+          };
+
           const updateDistType = (id, newType) => {
             setDistributions(distributions.map(d => {
-              if (d.id === id) {
-                let p = {};
-                switch (newType) {
-                  case 'normal': p = { mu: 0, sigma: 1 }; break;
-                  case 'beta': case 'gamma': p = { alpha: 2, beta: 2 }; break;
-                  case 'exponential': p = { lambda: 1 }; break;
-                  case 'uniform': p = { a: -2, b: 2 }; break;
-                  case 'laplace': p = { mu: 0, b: 1 }; break;
-                  case 'cauchy': p = { x0: 0, gammaVal: 1 }; break;
-                  case 'lognormal': p = { mu: 0, sigma: 1 }; break;
-                  case 'weibull': p = { k: 1.5, lambda: 1 }; break;
-                  case 'pareto': p = { xm: 1, alpha: 3 }; break;
-                  case 'logistic': p = { mu: 0, s: 1 }; break;
-                  case 'rayleigh': p = { sigma: 1 }; break;
-                  case 'binomial': p = { n: 10, p: 0.5 }; break;
-                  case 'poisson': p = { lambda: 4 }; break;
-                  case 'bernoulli': case 'geometric': p = { p: 0.5 }; break;
-                  case 'negative_binomial': p = { r: 3, p: 0.5 }; break;
-                  case 'hypergeometric': p = { N: 50, K: 10, n: 10 }; break;
-                  case 'discrete_uniform': p = { a: 1, b: 6 }; break;
-                  case 'student_t': p = { nu: 5 }; break;
-                  case 'f_dist': p = { d1: 5, d2: 5 }; break;
-                  case 'chisquare': p = { k: 5 }; break;
-                  default: p = { mu: 0, sigma: 1 };
-                }
-                return { ...d, type: newType, params: p, name: `${TYPE_LABELS[newType] || newType} ${id}` };
-              }
+              if (d.id === id) { return { ...d, type: newType, params: getParamsForType(newType), name: `${TYPE_LABELS[newType] || newType} ${id}` }; }
               return d;
             }));
           };
@@ -414,6 +838,12 @@
           const updateDistParam = (id, paramName, value) => {
             const parsedValue = value === '' ? '' : parseFloat(value);
             setDistributions(distributions.map(d => d.id === id ? { ...d, params: { ...d.params, [paramName]: isNaN(parsedValue) && parsedValue !== '' ? 0 : parsedValue } } : d));
+          };
+
+          const updateCltDistType = (newType) => { setCltState(prev => ({ ...prev, dist: { ...prev.dist, type: newType, params: getParamsForType(newType) }, isAnimating: false })); };
+          const updateCltDistParam = (paramName, value) => {
+              const parsedValue = value === '' ? '' : parseFloat(value);
+              setCltState(prev => ({ ...prev, dist: { ...prev.dist, params: { ...prev.dist.params, [paramName]: isNaN(parsedValue) && parsedValue !== '' ? 0 : parsedValue } }, isAnimating: false }));
           };
 
           const updateBayesState = (key, value) => {
@@ -449,11 +879,7 @@
           
           const updateSampleType = (id, newType) => {
             setInferenceSamples(inferenceSamples.map(s => {
-              if (s.id === id) {
-                let p = {};
-                if (newType === 'normal') p = { mu: 50, sigma: 10 }; else if (newType === 'uniform') p = { a: 0, b: 100 }; else if (newType === 'exponential') p = { lambda: 0.1 }; else if (newType === 'poisson') p = { lambda: 20 }; else if (newType === 'binomial') p = { n: 1, p: 0.5 };
-                return { ...s, type: newType, params: p, data: [] };
-              }
+              if (s.id === id) { return { ...s, type: newType, params: getParamsForType(newType), data: [] }; }
               return s;
             }));
           };
@@ -466,19 +892,51 @@
           const generateDataForSamples = () => {
             setInferenceSamples(prev => prev.map(samp => {
               let newData = [];
-              for (let i = 0; i < samp.size; i++) {
-                if (samp.type === 'normal') {
-                  let u = 0, v = 0; while (u === 0) u = Math.random(); while (v === 0) v = Math.random();
-                  let z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-                  newData.push(z * samp.params.sigma + samp.params.mu);
-                } else if (samp.type === 'uniform') newData.push(Math.random() * (samp.params.b - samp.params.a) + samp.params.a);
-                else if (samp.type === 'exponential') newData.push(-Math.log(1 - Math.random()) / samp.params.lambda);
-                else if (samp.type === 'poisson') { let L = Math.exp(-samp.params.lambda), k = 0, p = 1; do { k++; p *= Math.random(); } while (p > L); newData.push(k - 1); }
-                else if (samp.type === 'binomial') { let succ = 0; for (let j = 0; j < samp.params.n; j++) if (Math.random() < samp.params.p) succ++; newData.push(succ); }
-              }
+              for (let i = 0; i < samp.size; i++) { newData.push(randomFromDist(samp.type, samp.params)); }
               return { ...samp, data: newData };
             }));
           };
+
+          // --- CLT Engine ---
+          useEffect(() => {
+              const stats = getDistStats(cltState.dist.type, cltState.dist.params);
+              let newPopData = [];
+              for(let i=0; i<5000; i++) newPopData.push(randomFromDist(cltState.dist.type, cltState.dist.params));
+              setCltState(prev => ({
+                  ...prev, popData: newPopData, theoreticalMean: stats.mean, theoreticalSE: Math.sqrt(stats.var / prev.sampleSize), sampleMeans: [], empiricalMean: 0, empiricalSE: 0, isAnimating: false, progress: 0
+              }));
+          }, [cltState.dist.type, JSON.stringify(cltState.dist.params), cltState.sampleSize]);
+
+          const startCLTSimulation = () => { setCltState(prev => ({ ...prev, sampleMeans: [], empiricalMean: 0, empiricalSE: 0, isAnimating: true, progress: 0 })); };
+
+          useEffect(() => {
+              if (!cltState.isAnimating) return;
+              const { dist, sampleSize, numSamples, sampleMeans } = cltState;
+              if (sampleMeans.length >= numSamples) { setCltState(prev => ({ ...prev, isAnimating: false })); return; }
+
+              let chunkSize = 1;
+              if (sampleMeans.length > 5) chunkSize = 5;
+              if (sampleMeans.length > 50) chunkSize = 25;
+              if (sampleMeans.length > 200) chunkSize = Math.max(50, Math.floor(numSamples / 20));
+
+              const timer = setTimeout(() => {
+                  const newMeans = [];
+                  for(let i=0; i < chunkSize && (sampleMeans.length + newMeans.length) < numSamples; i++) {
+                      let sum = 0;
+                      for(let j=0; j < sampleSize; j++) sum += randomFromDist(dist.type, dist.params);
+                      newMeans.push(sum / sampleSize);
+                  }
+                  setCltState(prev => {
+                      const combined = [...prev.sampleMeans, ...newMeans];
+                      const eMean = combined.reduce((a, b) => a + b, 0) / combined.length;
+                      const eVar = combined.length > 1 ? combined.reduce((a, b) => a + Math.pow(b - eMean, 2), 0) / (combined.length - 1) : 0;
+                      return { ...prev, sampleMeans: combined, empiricalMean: eMean, empiricalSE: Math.sqrt(eVar), progress: combined.length };
+                  });
+              }, 40);
+              return () => clearTimeout(timer);
+          }, [cltState.isAnimating, cltState.sampleMeans, cltState.numSamples, cltState.sampleSize, cltState.dist]);
+
+          const cltPopEq = getEquationTexts(cltState.dist); 
 
           useEffect(() => { if (inferenceSamples[0].data.length === 0) generateDataForSamples(); }, []);
 
@@ -491,7 +949,6 @@
             return { points, minVal, maxVal };
           }, [inferenceSamples]);
 
-          // --- Safe X Axis Bounds for rendering to prevent crash when input is empty ---
           const safeXMin = isNaN(parseFloat(xAxisBounds.min)) ? -5 : parseFloat(xAxisBounds.min);
           const safeXMax = isNaN(parseFloat(xAxisBounds.max)) ? 10 : parseFloat(xAxisBounds.max);
 
@@ -549,7 +1006,6 @@
 
           const inferenceResults = useMemo(() => {
             const { testType, target1, target2, anovaTargets, hypoMean, knownVar1, knownVar2, tails, ciLevel } = testConfig;
-            
             const targetHypoMean = (hypoMean === '' || isNaN(hypoMean)) ? 0 : parseFloat(hypoMean);
             
             const s1 = inferenceSamples.find(s => s.id === parseInt(target1)); const s2 = inferenceSamples.find(s => s.id === parseInt(target2));
@@ -583,7 +1039,6 @@
                result.anovaTable = { sst, sse, ssTotal: sst + sse, dfT, dfE, dfTotal: dfT + dfE, mst, mse, f, p: result.pValue };
             }
             else if (testType === '1_sample_z' && s1?.data.length > 0) {
-              // Note: sample 'std' is returned but intentionally omitted here because Z-tests rely purely on the known population variance
               const { n, mean } = getStats(s1.data); const se = knownVar1 / Math.sqrt(n); const z = (mean - targetHypoMean) / se;
               result.statName = 'Z'; result.statVal = z; result.pValue = calcPValue(z, 'Z');
               result.baseEq = 'Z = (x̄ - μ₀) / (σ / √n)'; result.subEq = `Z = (${fmt(mean)} - ${targetHypoMean}) / (${knownVar1} / √${n}) = ${fmt(z)}`;
@@ -598,7 +1053,6 @@
               result.ci = [mean - tCrit * se, mean + tCrit * se];
             }
             else if (testType === '2_sample_z' && s1?.data.length > 0 && s2?.data.length > 0) {
-              // Note: sample 'std' values are omitted intentionally for 2-sample Z-test, defaulting to the assumed known variances
               const st1 = getStats(s1.data), st2 = getStats(s2.data); const se = Math.sqrt((knownVar1*knownVar1)/st1.n + (knownVar2*knownVar2)/st2.n); const z = (st1.mean - st2.mean - targetHypoMean) / se;
               result.statName = 'Z'; result.statVal = z; result.pValue = calcPValue(z, 'Z');
               result.baseEq = 'Z = (x̄₁ - x̄₂ - d₀) / √(σ₁²/n₁ + σ₂²/n₂)'; result.subEq = `Z = (${fmt(st1.mean)} - ${fmt(st2.mean)} - ${targetHypoMean}) / √(${knownVar1}²/${st1.n} + ${knownVar2}²/${st2.n}) = ${fmt(z)}`;
@@ -643,11 +1097,12 @@
             return result;
           }, [testConfig, inferenceSamples]);
 
-          const renderDistributionParams = (dist) => {
+          // --- Parameter Input Components ---
+          const renderParams = (dist, updateFn) => {
             const p = dist.params;
             const update = (name, val) => {
               const parsedVal = val === '' ? '' : parseFloat(val);
-              updateDistParam(dist.id, name, isNaN(parsedVal) && val !== '' ? 0 : parsedVal);
+              updateFn(name, isNaN(parsedVal) && val !== '' ? 0 : parsedVal);
             };
             switch (dist.type) {
               case 'normal': return ( <><label className="text-sm text-gray-400 flex justify-between"><span>Mean (μ)</span> <span>{fmt(p.mu)}</span></label><input type="range" min="-10" max="10" step="0.5" value={p.mu} onChange={(e) => update('mu', e.target.value)} className="w-full accent-blue-500 mb-2" /><label className="text-sm text-gray-400 flex justify-between"><span>Std Dev (σ)</span> <span>{fmt(p.sigma)}</span></label><input type="range" min="0.1" max="5" step="0.1" value={p.sigma} onChange={(e) => update('sigma', e.target.value)} className="w-full accent-blue-500" /></> );
@@ -687,6 +1142,7 @@
                       <p><strong className="text-white">Params:</strong> {DIST_INFO[infoModal]?.params}</p>
                       <div className="bg-gray-950 p-3 rounded font-mono text-pink-400">{DIST_INFO[infoModal]?.formula}</div>
                       <p><strong className="text-white">Uses:</strong> {DIST_INFO[infoModal]?.uses}</p>
+                      <p className="text-sm text-gray-400 italic mt-4 border-t border-gray-800 pt-2">{DIST_INFO[infoModal]?.notes}</p>
                     </div>
                   </div>
                 </div>
@@ -698,21 +1154,336 @@
                     Advanced Statistics & Inference Lab
                   </h1>
                   <p className="text-gray-400 text-sm max-w-2xl mx-auto mb-2">
-                    An interactive platform for exploring probability distributions, hypothesis testing, and Bayesian inference.
+                    Interactive platform for exploring probability distributions, hypothesis testing, and advanced regressions.
                   </p>
                   <div className="flex justify-center items-center gap-3 text-xs text-gray-500 font-mono">
-                    <span className="bg-gray-800/50 px-2 py-1 rounded border border-gray-800">Version 1.03 - 2026</span>
+                    <span className="bg-gray-800/50 px-2 py-1 rounded border border-gray-800">Version 2.5 - 2026</span>
                     <span>•</span>
-                    <span>Prepared by Eng. Soliman Ghonimy</span>
+                    <span>Powered by Eng. Soliman Ghonimy</span>
                   </div>
                 </header>
 
                 <div className="flex flex-wrap justify-center gap-4 mb-8">
+                  <button onClick={() => setActiveTab('regression')} className={`px-6 py-2 rounded-full font-bold transition-all ${activeTab === 'regression' ? 'bg-teal-600 text-white shadow-lg shadow-teal-500/30' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>Advanced Regression Lab</button>
                   <button onClick={() => setActiveTab('explorer')} className={`px-6 py-2 rounded-full font-bold transition-all ${activeTab === 'explorer' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>Distributions Explorer</button>
-                  <button onClick={() => setActiveTab('inference')} className={`px-6 py-2 rounded-full font-bold transition-all ${activeTab === 'inference' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/30' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>Applied Inference & Testing</button>
+                  <button onClick={() => setActiveTab('clt')} className={`px-6 py-2 rounded-full font-bold transition-all ${activeTab === 'clt' ? 'bg-cyan-500 text-white shadow-lg shadow-cyan-500/30' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>CLT Simulator</button>
+                  <button onClick={() => setActiveTab('power')} className={`px-6 py-2 rounded-full font-bold transition-all ${activeTab === 'power' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>Power & Errors</button>
+                  <button onClick={() => setActiveTab('inference')} className={`px-6 py-2 rounded-full font-bold transition-all ${activeTab === 'inference' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/30' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>Applied Inference</button>
                   <button onClick={() => setActiveTab('bayesian')} className={`px-6 py-2 rounded-full font-bold transition-all ${activeTab === 'bayesian' ? 'bg-pink-600 text-white shadow-lg shadow-pink-500/30' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>Bayesian Inference</button>
                 </div>
 
+                {/* --- TAB: ADVANCED REGRESSION LAB --- */}
+                {activeTab === 'regression' && (() => {
+                    const regResults = calculateAdvancedRegression(regressionPoints, regConfig.type, regConfig.ciLevel);
+                    const plotWidth = 800;
+                    const plotHeight = 400;
+                    const padding = 50;
+                    const innerW = plotWidth - padding * 2;
+                    const innerH = plotHeight - padding * 2;
+                    
+                    const minX = parseFloat(regConfig.xMin) || 0;
+                    const maxX = parseFloat(regConfig.xMax) || 10;
+                    const minY = parseFloat(regConfig.yMin) || 0;
+                    const maxY = parseFloat(regConfig.yMax) || 15;
+                    
+                    const scaleX = (x) => padding + ((x - minX) / (maxX - minX)) * innerW;
+                    const scaleY = (y) => plotHeight - padding - ((y - minY) / (maxY - minY)) * innerH;
+                    const unscaleX = (sx) => minX + ((sx - padding) / innerW) * (maxX - minX);
+                    const unscaleY = (sy) => minY + ((plotHeight - padding - sy) / innerH) * (maxY - minY);
+                    
+                    const handleSvgClick = (e) => {
+                        if (draggingPoint) return;
+                        const svg = e.currentTarget;
+                        const pt = svg.createSVGPoint();
+                        pt.x = e.clientX; pt.y = e.clientY;
+                        const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
+                        const newX = unscaleX(svgP.x); const newY = unscaleY(svgP.y);
+                        
+                        if(newX >= minX && newX <= maxX && newY >= minY && newY <= maxY) {
+                             const newId = regressionPoints.length > 0 ? Math.max(...regressionPoints.map(p => p.id)) + 1 : 1;
+                             setRegressionPoints([...regressionPoints, { id: newId, x: newX, y: newY }]);
+                        }
+                    };
+
+                    const handleMouseDown = (e, id) => { e.stopPropagation(); setDraggingPoint(id); };
+                    const handleMouseMove = (e) => {
+                        if (!draggingPoint) return;
+                        const svg = e.currentTarget;
+                        const pt = svg.createSVGPoint();
+                        pt.x = e.clientX; pt.y = e.clientY;
+                        const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
+                        let newX = unscaleX(svgP.x); let newY = unscaleY(svgP.y);
+                        newX = Math.max(minX, Math.min(maxX, newX)); newY = Math.max(minY, Math.min(maxY, newY));
+                        setRegressionPoints(prev => prev.map(p => p.id === draggingPoint ? { ...p, x: newX, y: newY } : p));
+                    };
+                    const handleMouseUp = () => setDraggingPoint(null);
+                    const handleDoubleClick = (e, id) => {
+                        e.stopPropagation(); setRegressionPoints(prev => prev.filter(p => p.id !== id));
+                    };
+
+                    const gridLines = [];
+                    for (let i = 0; i <= 10; i++) {
+                        const xVal = minX + (maxX - minX) * (i / 10);
+                        const yVal = minY + (maxY - minY) * (i / 10);
+                        gridLines.push(<g key={`rgx-${i}`}><line x1={scaleX(xVal)} y1={padding} x2={scaleX(xVal)} y2={plotHeight - padding} stroke="#374151" /><text x={scaleX(xVal)} y={plotHeight - padding + 20} fill="#9ca3af" fontSize="12" textAnchor="middle">{xVal.toFixed(1)}</text></g>);
+                        gridLines.push(<g key={`rgy-${i}`}><line x1={padding} y1={scaleY(yVal)} x2={plotWidth - padding} y2={scaleY(yVal)} stroke="#374151" strokeDasharray="4,4" /><text x={padding - 10} y={scaleY(yVal) + 4} fill="#9ca3af" fontSize="12" textAnchor="end">{yVal.toFixed(1)}</text></g>);
+                    }
+
+                    // --- Calculate Curve and CI Bands ---
+                    let curvePath = "";
+                    let ciPath = "";
+                    if (regResults) {
+                        const steps = 150;
+                        const stepX = (maxX - minX) / steps;
+                        const curvePts = [];
+                        const ciUpper = [];
+                        const ciLower = [];
+                        
+                        for (let i = 0; i <= steps; i++) {
+                            const x = minX + i * stepX;
+                            if (regConfig.type === 'logarithmic' && x <= 0) continue; 
+                            
+                            const yP = regResults.predict(x);
+                            curvePts.push({ x, y: yP });
+                            
+                            if (regConfig.showCI) {
+                                const ci = regResults.getCI(x);
+                                ciUpper.push({ x, y: ci.upper });
+                                ciLower.push({ x, y: ci.lower });
+                            }
+                        }
+                        
+                        if(curvePts.length > 0) {
+                            curvePath = curvePts.map((p, i) => `${i===0?'M':'L'} ${scaleX(p.x)} ${scaleY(Math.max(minY, Math.min(maxY, p.y)))}`).join(' ');
+                        }
+                        
+                        if (regConfig.showCI && ciUpper.length > 0) {
+                            const upperStr = ciUpper.map((p, i) => `${i===0?'M':'L'} ${scaleX(p.x)} ${scaleY(Math.max(minY, Math.min(maxY, p.y)))}`).join(' ');
+                            const lowerStr = ciLower.reverse().map(p => `L ${scaleX(p.x)} ${scaleY(Math.max(minY, Math.min(maxY, p.y)))}`).join(' ');
+                            ciPath = `${upperStr} ${lowerStr} Z`;
+                        }
+                    }
+
+                    return (
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                            <div className="lg:col-span-8 space-y-6">
+                                <div className="bg-gray-900 p-6 rounded-xl border border-teal-500/30 shadow-xl select-none">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h2 className="text-xl font-bold text-teal-400 flex items-center gap-2">Interactive Advanced Regression</h2>
+                                        <span className="text-xs text-gray-400 bg-gray-800 px-2 py-1 rounded">Click: Add | Drag: Move | Dbl-Click: Remove</span>
+                                    </div>
+                                    
+                                    {/* Control panel for dynamic axes */}
+                                    <div className="flex flex-wrap gap-4 mb-4 bg-gray-950 p-3 rounded-lg border border-gray-800 text-sm justify-center items-center">
+                                        <div className="flex gap-2 items-center">
+                                            <span className="text-gray-400">X-Axis:</span>
+                                            <input type="number" value={regConfig.xMin} onChange={e => setRegConfig({...regConfig, xMin: e.target.value})} className="w-16 bg-gray-800 text-white p-1 rounded text-center border border-gray-600 focus:border-teal-500" />
+                                            <span>to</span>
+                                            <input type="number" value={regConfig.xMax} onChange={e => setRegConfig({...regConfig, xMax: e.target.value})} className="w-16 bg-gray-800 text-white p-1 rounded text-center border border-gray-600 focus:border-teal-500" />
+                                        </div>
+                                        <div className="w-px h-6 bg-gray-700 hidden md:block"></div>
+                                        <div className="flex gap-2 items-center">
+                                            <span className="text-gray-400">Y-Axis:</span>
+                                            <input type="number" value={regConfig.yMin} onChange={e => setRegConfig({...regConfig, yMin: e.target.value})} className="w-16 bg-gray-800 text-white p-1 rounded text-center border border-gray-600 focus:border-teal-500" />
+                                            <span>to</span>
+                                            <input type="number" value={regConfig.yMax} onChange={e => setRegConfig({...regConfig, yMax: e.target.value})} className="w-16 bg-gray-800 text-white p-1 rounded text-center border border-gray-600 focus:border-teal-500" />
+                                        </div>
+                                    </div>
+
+                                    <div className="relative w-full overflow-hidden bg-gray-950 rounded-xl border border-gray-700">
+                                        <svg 
+                                            viewBox={`0 0 ${plotWidth} ${plotHeight}`} 
+                                            className={`w-full h-auto ${draggingPoint ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+                                            onClick={handleSvgClick} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}
+                                        >
+                                            {gridLines}
+                                            <line x1={padding} y1={plotHeight - padding} x2={plotWidth - padding} y2={plotHeight - padding} stroke="#6b7280" strokeWidth="2" />
+                                            <line x1={padding} y1={padding} x2={padding} y2={plotHeight - padding} stroke="#6b7280" strokeWidth="2" />
+                                            <text x={plotWidth / 2} y={plotHeight - 10} fill="#d1d5db" fontSize="14" textAnchor="middle">Independent Variable (X)</text>
+                                            <text x={15} y={plotHeight / 2} fill="#d1d5db" fontSize="14" textAnchor="middle" transform={`rotate(-90 15 ${plotHeight/2})`}>Dependent Variable (Y)</text>
+
+                                            {/* Confidence Interval Band */}
+                                            {regResults && regConfig.showCI && ciPath && (
+                                                <path d={ciPath} fill="#14b8a6" opacity="0.15" />
+                                            )}
+
+                                            {/* Regression Curve */}
+                                            {regResults && curvePath && (
+                                                <path d={curvePath} fill="none" stroke="#14b8a6" strokeWidth="3" className="transition-all duration-75" />
+                                            )}
+
+                                            {/* Residual Lines */}
+                                            {regResults && regressionPoints.map(p => {
+                                                if(regConfig.type === 'logarithmic' && p.x <= 0) return null;
+                                                const yPred = regResults.predict(p.x);
+                                                return <line key={`err-${p.id}`} x1={scaleX(p.x)} y1={scaleY(p.y)} x2={scaleX(p.x)} y2={scaleY(yPred)} stroke="#ef4444" strokeWidth="1.5" strokeDasharray="3,3" opacity="0.6" />;
+                                            })}
+
+                                            {/* Data Points */}
+                                            {regressionPoints.map(p => (
+                                                <circle 
+                                                    key={p.id} cx={scaleX(p.x)} cy={scaleY(p.y)} r={p.id === draggingPoint ? "8" : "6"} 
+                                                    fill={p.id === draggingPoint ? "#f59e0b" : "#3b82f6"} stroke="#fff" strokeWidth="2"
+                                                    onMouseDown={(e) => handleMouseDown(e, p.id)} onDoubleClick={(e) => handleDoubleClick(e, p.id)}
+                                                    className="cursor-grab transition-colors duration-150"
+                                                />
+                                            ))}
+                                        </svg>
+                                    </div>
+                                    
+                                    <div className="flex justify-between items-center mt-4">
+                                        <button onClick={() => setRegressionPoints([])} className="text-sm text-red-400 hover:text-red-300 bg-gray-800 px-3 py-1 rounded">Clear Points</button>
+                                        <button onClick={() => setRegressionPoints([{ id: 1, x: 1, y: 2 }, { id: 2, x: 2, y: 4 }, { id: 3, x: 3, y: 5 }, { id: 4, x: 4, y: 4 }, { id: 5, x: 5, y: 7 }, { id: 6, x: 6, y: 8 }, { id: 7, x: 7, y: 7 }, { id: 8, x: 8, y: 9 }, { id: 9, x: 9, y: 11 }])} className="text-sm text-teal-400 hover:text-teal-300 bg-gray-800 px-3 py-1 rounded">Reset Default</button>
+                                    </div>
+                                </div>
+
+                                {/* Diagnostics Panel: QQ Plot and Residuals */}
+                                <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl mt-6">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="text-lg font-bold text-gray-300">Model Diagnostics</h3>
+                                        <div className="bg-gray-800 rounded p-1 flex text-sm">
+                                            <button onClick={() => setRegConfig({...regConfig, diagView: 'residuals'})} className={`px-4 py-1 rounded ${regConfig.diagView==='residuals'?'bg-teal-600 text-white':'text-gray-400 hover:text-white'}`}>Residuals</button>
+                                            <button onClick={() => setRegConfig({...regConfig, diagView: 'qq'})} className={`px-4 py-1 rounded ${regConfig.diagView==='qq'?'bg-teal-600 text-white':'text-gray-400 hover:text-white'}`}>Normality (Q-Q)</button>
+                                        </div>
+                                    </div>
+
+                                    <div className="relative w-full h-56 bg-gray-950 rounded-xl border border-gray-700 p-4 overflow-hidden">
+                                        {/* Residuals View */}
+                                        {regResults && regConfig.diagView === 'residuals' && (
+                                            <svg viewBox={`0 0 ${plotWidth} 180`} className="w-full h-full">
+                                                <line x1={padding} y1={90} x2={plotWidth - padding} y2={90} stroke="#14b8a6" strokeWidth="2" strokeDasharray="5,5" />
+                                                <text x={padding - 10} y={90 + 4} fill="#9ca3af" fontSize="12" textAnchor="end">0</text>
+                                                {(() => {
+                                                    const maxRes = Math.max(0.1, ...regResults.residuals.map(r => Math.abs(r.y)));
+                                                    const resScaleY = (y) => 90 - (y / maxRes) * 70;
+                                                    return regResults.residuals.map((r, i) => (
+                                                        <g key={`res-${i}`}>
+                                                            <line x1={scaleX(r.x)} y1={90} x2={scaleX(r.x)} y2={resScaleY(r.y)} stroke="#ef4444" strokeWidth="2" opacity="0.7" />
+                                                            <circle cx={scaleX(r.x)} cy={resScaleY(r.y)} r="5" fill="#ef4444" />
+                                                        </g>
+                                                    ));
+                                                })()}
+                                            </svg>
+                                        )}
+
+                                        {/* Q-Q Plot and Normality Test View */}
+                                        {regResults && regConfig.diagView === 'qq' && (
+                                            <div className="w-full h-full flex">
+                                                <div className="flex-1 relative">
+                                                    <svg viewBox="0 0 400 200" className="w-full h-full">
+                                                        {(() => {
+                                                            const maxR = Math.max(0.1, ...regResults.qqPoints.map(p=>Math.abs(p.res)));
+                                                            const scZ = (z) => 200 + (z / 3) * 150;
+                                                            const scR = (r) => 100 - (r / maxR) * 80;
+                                                            return (
+                                                                <>
+                                                                    <line x1={200} y1={20} x2={200} y2={180} stroke="#374151" />
+                                                                    <line x1={50} y1={100} x2={350} y2={100} stroke="#374151" />
+                                                                    <text x={200} y={195} fill="#9ca3af" fontSize="10" textAnchor="middle">Theoretical Quantiles (Z)</text>
+                                                                    
+                                                                    {/* Reference Line */}
+                                                                    <line x1={scZ(-2.5)} y1={scR(-2.5*regResults.stdRes)} x2={scZ(2.5)} y2={scR(2.5*regResults.stdRes)} stroke="#14b8a6" strokeWidth="2" strokeDasharray="4,4" opacity="0.5"/>
+                                                                    
+                                                                    {/* Q-Q Points */}
+                                                                    {regResults.qqPoints.map((p,i) => (
+                                                                        <circle key={`qq-${i}`} cx={scZ(p.z)} cy={scR(p.res)} r="4" fill="#8b5cf6" />
+                                                                    ))}
+                                                                </>
+                                                            );
+                                                        })()}
+                                                    </svg>
+                                                </div>
+                                                <div className="w-64 border-l border-gray-700 pl-4 flex flex-col justify-center text-sm">
+                                                    <div className="font-bold text-gray-300 mb-2 border-b border-gray-700 pb-1">Ryan-Joiner Test (Shapiro Proxy)</div>
+                                                    <div className="flex justify-between text-gray-400 mb-1"><span>Test Statistic (R):</span><span className="text-white font-mono">{regResults.rjCorrel.toFixed(4)}</span></div>
+                                                    <div className="flex justify-between text-gray-400 mb-4"><span>Status:</span>
+                                                        {regResults.isNormal ? <span className="text-emerald-400 font-bold">Normal ✓</span> : <span className="text-red-400 font-bold">Non-Normal ✗</span>}
+                                                    </div>
+                                                    <p className="text-[10px] text-gray-500">Points following the straight line indicate normally distributed residuals. Essential for valid Confidence Intervals.</p>
+                                                </div>
+                                            </div>
+                                        )}
+                                        {!regResults && <div className="flex h-full items-center justify-center text-gray-600">Need at least 3 points</div>}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Configuration and Metrics Panel */}
+                            <div className="lg:col-span-4 space-y-6">
+                                <div className="bg-gray-900 p-6 rounded-xl border border-teal-500/30 shadow-xl">
+                                    <h2 className="text-xl font-bold text-teal-400 mb-4 border-b border-gray-800 pb-2">Regression Configuration</h2>
+                                    
+                                    <div className="space-y-4 mb-6">
+                                        <div>
+                                            <label className="text-xs text-gray-400 block mb-1">Regression Model Type</label>
+                                            <select value={regConfig.type} onChange={e => setRegConfig({...regConfig, type: e.target.value})} className="w-full bg-gray-800 text-white border border-gray-600 rounded p-2 focus:border-teal-500 outline-none">
+                                                <option value="linear">Linear ( y = ax + b )</option>
+                                                <option value="quadratic">Quadratic ( y = ax² + bx + c )</option>
+                                                <option value="exponential">Exponential ( y = a e^(bx) )</option>
+                                                <option value="logarithmic">Logarithmic ( y = a + b ln(x) )</option>
+                                            </select>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-xs text-gray-400 block mb-1">Confidence Bounds</label>
+                                                <select value={regConfig.ciLevel} onChange={e => setRegConfig({...regConfig, ciLevel: parseFloat(e.target.value)})} className="w-full bg-gray-800 text-white border border-gray-600 rounded p-2 focus:border-teal-500 outline-none">
+                                                    <option value={0.90}>90% CI</option>
+                                                    <option value={0.95}>95% CI</option>
+                                                    <option value={0.99}>99% CI</option>
+                                                </select>
+                                            </div>
+                                            <div className="flex items-end pb-2">
+                                                <label className="flex items-center gap-2 cursor-pointer bg-gray-800 p-2 rounded w-full justify-center border border-gray-700">
+                                                    <input type="checkbox" checked={regConfig.showCI} onChange={e => setRegConfig({...regConfig, showCI: e.target.checked})} className="accent-teal-500 w-4 h-4" />
+                                                    <span className="text-sm text-gray-300">Draw Area</span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <h2 className="text-xl font-bold text-teal-400 mb-4 border-b border-gray-800 pb-2">Model Metrics</h2>
+                                    {regResults ? (
+                                        <div className="space-y-4">
+                                            <div className="bg-gray-800 p-4 rounded-lg text-center">
+                                                <div className="text-xs text-gray-400 mb-1 uppercase font-bold">Fitted Equation</div>
+                                                <div className="text-lg font-serif text-teal-300" style={{ direction: 'ltr' }}>
+                                                    {regResults.equation}
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div className="bg-gray-800 p-3 rounded-lg border-t-2 border-emerald-500 text-center">
+                                                    <div className="text-xs text-gray-400 mb-1" title="Coefficient of Determination">R-Squared (R²)</div>
+                                                    <div className="text-2xl font-mono font-bold text-emerald-400">{regResults.rSquared.toFixed(4)}</div>
+                                                </div>
+                                                <div className="bg-gray-800 p-3 rounded-lg border-t-2 border-red-500 text-center">
+                                                    <div className="text-xs text-gray-400 mb-1" title="Mean Squared Error">MSE</div>
+                                                    <div className="text-2xl font-mono font-bold text-red-400">{regResults.mse.toFixed(2)}</div>
+                                                </div>
+                                            </div>
+                                            
+                                            <div className="bg-gray-800 p-4 rounded-lg mt-4 text-sm text-gray-300">
+                                                <p className="mb-2"><strong className="text-emerald-400">Analysis:</strong></p>
+                                                <p className="text-xs">
+                                                    The {regConfig.type} model explains <strong>{(regResults.rSquared * 100).toFixed(1)}%</strong> of the variance in Y.
+                                                    {regResults.rSquared > 0.8 ? " This is an excellent fit." : regResults.rSquared > 0.5 ? " This is a moderate fit." : " This is a poor fit."}
+                                                </p>
+                                                {!regResults.isNormal && (
+                                                    <p className="text-[11px] text-red-400 mt-2 font-bold leading-tight">⚠️ Warning: Residuals are not normally distributed (via Ryan-Joiner test). Confidence intervals may be inaccurate.</p>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="text-gray-500 text-center py-8">Add at least 3 points to calculate regression.</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })()}
+
+                {/* --- TAB: EXPLORER --- */}
                 {activeTab === 'explorer' && (
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     <div className="lg:col-span-2 space-y-4">
@@ -746,7 +1517,7 @@
                             </div>
                             <button onClick={() => removeDistribution(dist.id)} className="text-red-400 hover:text-red-300 text-xl leading-none">&times;</button>
                           </div>
-                          {renderDistributionParams(dist)}
+                          {renderParams(dist, (name, val) => updateDistParam(dist.id, name, val))}
                         </div>
                       ))}
                       {distributions.length === 0 && (
@@ -756,6 +1527,245 @@
                   </div>
                 )}
 
+                {/* --- TAB: CLT SIMULATOR --- */}
+                {activeTab === 'clt' && (
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                        <div className="lg:col-span-8 space-y-6">
+                            
+                            <div className="bg-gray-900 p-4 rounded-xl border border-cyan-800/50 shadow-lg text-center">
+                               <div className="font-serif text-lg text-pink-300">Population: <span className="font-mono">X ~ Dist(μ, σ²)</span></div>
+                               <div className="font-serif text-lg text-emerald-300 my-1">Sample Mean: <span className="font-mono">X̄ = (1/n) Σ Xᵢ</span></div>
+                               <div className="font-serif text-xl text-cyan-300 mt-2 p-2 bg-gray-950 rounded inline-block border border-gray-800">
+                                   CLT: <span className="font-mono">X̄ → Normal(μ, σ²/n)</span> as n → ∞
+                               </div>
+                            </div>
+
+                            <div className="bg-gray-900 p-6 rounded-xl border border-cyan-500/30 shadow-xl relative">
+                                {cltState.isAnimating && (
+                                    <div className="absolute top-0 left-0 w-full h-1 bg-gray-800 rounded-t-xl overflow-hidden">
+                                        <div className="h-full bg-cyan-500 transition-all duration-100" style={{ width: `${(cltState.progress / cltState.numSamples) * 100}%` }}></div>
+                                    </div>
+                                )}
+                                
+                                <h2 className="text-xl font-bold text-cyan-400 mb-2 flex justify-between items-center">
+                                    <span>Central Limit Theorem (CLT)</span>
+                                    <span className="text-sm font-mono bg-gray-800 px-3 py-1 rounded text-gray-300">Samples drawn: {cltState.progress} / {cltState.numSamples}</span>
+                                </h2>
+                                <p className="text-sm text-gray-400 mb-6">
+                                    Notice how the distribution of <strong>Sample Means</strong> (bottom) approximates a Normal (Gaussian) shape, regardless of how skewed or irregular the <strong>Original Population</strong> (top) is.
+                                </p>
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="flex flex-col gap-2">
+                                      <HistogramPlotter 
+                                          data={cltState.popData} 
+                                          domainMin={isNaN(cltState.theoreticalMean) ? -10 : cltState.theoreticalMean - cltState.theoreticalSE * Math.sqrt(cltState.sampleSize) * 4} 
+                                          domainMax={isNaN(cltState.theoreticalMean) ? 10 : cltState.theoreticalMean + cltState.theoreticalSE * Math.sqrt(cltState.sampleSize) * 4} 
+                                          color="#f59e0b" 
+                                          title="1. Original Population Distribution" 
+                                      />
+                                      <div className="bg-gray-800 p-2 rounded-lg text-center text-xs">
+                                          <div className="text-pink-300 font-serif mb-1">{cltPopEq.base}</div>
+                                          <div className="text-emerald-300 font-serif">{cltPopEq.param}</div>
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="flex flex-col gap-2">
+                                      <HistogramPlotter 
+                                          data={cltState.sampleMeans} 
+                                          domainMin={isNaN(cltState.theoreticalMean) ? -10 : cltState.theoreticalMean - cltState.theoreticalSE * 4} 
+                                          domainMax={isNaN(cltState.theoreticalMean) ? 10 : cltState.theoreticalMean + cltState.theoreticalSE * 4} 
+                                          color="#06b6d4" 
+                                          title={`2. Distribution of Sample Means (n=${cltState.sampleSize})`} 
+                                          overlayNormal={{ show: cltState.progress > 5, mean: cltState.theoreticalMean, se: cltState.theoreticalSE }}
+                                      />
+                                      <div className="bg-gray-800 p-2 rounded-lg text-center text-xs">
+                                          <div className="text-pink-300 font-serif mb-1">
+                                              CLT: X̄ ~ N(μ, σ²/n)
+                                          </div>
+                                          <div className="text-emerald-300 font-serif">
+                                              X̄ ~ N({fmt(cltState.theoreticalMean)}, {fmt(Math.pow(cltState.theoreticalSE, 2))})
+                                          </div>
+                                      </div>
+                                    </div>
+                                </div>
+
+                                <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="bg-gray-800 p-4 rounded-lg border-l-2 border-amber-500">
+                                        <div className="text-xs text-gray-500 mb-1 uppercase font-bold">Theoretical Expected Values</div>
+                                        <div className="flex justify-between mb-1"><span className="text-gray-300">Population Mean (μ):</span> <span className="font-mono text-white">{fmt(cltState.theoreticalMean)}</span></div>
+                                        <div className="flex justify-between"><span className="text-gray-300">Standard Error (σ/√n):</span> <span className="font-mono text-white">{fmt(cltState.theoreticalSE)}</span></div>
+                                    </div>
+                                    <div className="bg-gray-800 p-4 rounded-lg border-l-2 border-cyan-500">
+                                        <div className="text-xs text-gray-500 mb-1 uppercase font-bold">Empirical Simulation Results</div>
+                                        <div className="flex justify-between mb-1"><span className="text-gray-300">Mean of Means:</span> <span className="font-mono text-cyan-300 font-bold">{fmt(cltState.empiricalMean)}</span></div>
+                                        <div className="flex justify-between"><span className="text-gray-300">Std Dev of Means (SE):</span> <span className="font-mono text-cyan-300 font-bold">{fmt(cltState.empiricalSE)}</span></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="lg:col-span-4 space-y-6">
+                            <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl">
+                                <h2 className="text-xl font-bold text-cyan-400 mb-4 border-b border-gray-800 pb-2">Simulation Engine</h2>
+                                
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="text-sm text-gray-400 block mb-1">Population Distribution</label>
+                                        <select 
+                                            value={cltState.dist.type} 
+                                            onChange={(e) => updateCltDistType(e.target.value)} 
+                                            className="w-full bg-gray-800 text-white border border-gray-600 rounded p-2 focus:border-cyan-500 outline-none"
+                                            disabled={cltState.isAnimating}
+                                        >
+                                            <optgroup label="Continuous">
+                                              <option value="normal">Normal</option>
+                                              <option value="beta">Beta</option>
+                                              <option value="gamma">Gamma</option>
+                                              <option value="exponential">Exponential</option>
+                                              <option value="uniform">Uniform</option>
+                                              <option value="laplace">Laplace</option>
+                                              <option value="lognormal">Log-Normal</option>
+                                              <option value="cauchy">Cauchy (CLT Fails!)</option>
+                                              <option value="weibull">Weibull</option>
+                                              <option value="pareto">Pareto</option>
+                                              <option value="logistic">Logistic</option>
+                                              <option value="rayleigh">Rayleigh</option>
+                                            </optgroup>
+                                            <optgroup label="Discrete">
+                                              <option value="binomial">Binomial</option>
+                                              <option value="poisson">Poisson</option>
+                                              <option value="bernoulli">Bernoulli</option>
+                                              <option value="geometric">Geometric</option>
+                                              <option value="negative_binomial">Negative Binomial</option>
+                                              <option value="hypergeometric">Hypergeometric</option>
+                                              <option value="discrete_uniform">Discrete Uniform</option>
+                                            </optgroup>
+                                            <optgroup label="Sampling">
+                                              <option value="student_t">Student's t</option>
+                                              <option value="f_dist">F-Dist</option>
+                                              <option value="chisquare">Chi-Square</option>
+                                            </optgroup>
+                                        </select>
+                                    </div>
+
+                                    <div className={`bg-gray-800 p-3 rounded-lg space-y-3 ${cltState.isAnimating ? 'opacity-50 pointer-events-none' : ''}`}>
+                                        {renderParams(cltState.dist, (name, val) => updateCltDistParam(name, val))}
+                                    </div>
+
+                                    <div className={`border-t border-gray-700 pt-4 ${cltState.isAnimating ? 'opacity-50 pointer-events-none' : ''}`}>
+                                        <label className="text-sm text-cyan-300 font-bold block mb-1">Sample Size (n)</label>
+                                        <p className="text-xs text-gray-500 mb-2">Observations per sample (Larger n = tighter bell curve)</p>
+                                        <input type="range" min="2" max="100" step="1" value={cltState.sampleSize} onChange={e => setCltState({...cltState, sampleSize: parseInt(e.target.value)})} className="w-full accent-cyan-500" />
+                                        <div className="text-center text-white font-mono mt-1">n = {cltState.sampleSize}</div>
+                                    </div>
+
+                                    <div className={cltState.isAnimating ? 'opacity-50 pointer-events-none' : ''}>
+                                        <label className="text-sm text-gray-400 flex justify-between"><span>Total Samples to Draw (N)</span><span>{cltState.numSamples}</span></label>
+                                        <input type="range" min="100" max="5000" step="100" value={cltState.numSamples} onChange={e => setCltState({...cltState, numSamples: parseInt(e.target.value)})} className="w-full accent-gray-500" />
+                                    </div>
+
+                                    <button 
+                                        onClick={startCLTSimulation} 
+                                        disabled={cltState.isAnimating}
+                                        className={`w-full py-3 rounded font-bold mt-4 transition-colors shadow-lg ${cltState.isAnimating ? 'bg-gray-600 text-gray-400 cursor-not-allowed' : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-cyan-500/20'}`}
+                                    >
+                                        {cltState.isAnimating ? 'SIMULATING...' : 'START SIMULATION'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* --- TAB: POWER & ERRORS LAB --- */}
+                {activeTab === 'power' && (
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                        <div className="lg:col-span-8 space-y-6">
+                            <div className="bg-gray-900 p-4 rounded-xl border border-indigo-800/50 shadow-lg text-center flex flex-wrap gap-4 justify-center">
+                               <div className="font-serif text-lg text-gray-300">
+                                   Alpha (<span className="text-red-400">α</span>): False Positive Rate
+                               </div>
+                               <div className="font-serif text-lg text-gray-300">
+                                   Beta (<span className="text-amber-400">β</span>): False Negative Rate
+                               </div>
+                               <div className="font-serif text-lg font-bold text-emerald-400 p-1 px-3 bg-gray-950 rounded border border-gray-800">
+                                   Power = 1 - <span className="text-amber-400">β</span>
+                               </div>
+                            </div>
+
+                            <div className="bg-gray-900 p-6 rounded-xl border border-indigo-500/30 shadow-xl">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-xl font-bold text-indigo-400 flex items-center gap-2">
+                                        Type I/II Errors & Statistical Power <button onClick={() => setInfoModal('power_lab')} className="text-blue-400 bg-gray-800 rounded-full w-5 h-5 flex justify-center items-center text-sm">ℹ</button>
+                                    </h2>
+                                </div>
+                                <PowerPlotter mu0={powerState.mu0} muA={powerState.muA} sigma={powerState.sigma} n={powerState.n} alphaLevel={powerState.alpha} />
+                                
+                                <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div className="bg-gray-800 p-3 rounded-lg border-t-2 border-red-500 text-center">
+                                        <div className="text-xs text-gray-400 mb-1">Alpha (α) / P(Type I)</div>
+                                        <div className="text-xl font-mono font-bold text-red-400">{powerState.alpha.toFixed(3)}</div>
+                                    </div>
+                                    <div className="bg-gray-800 p-3 rounded-lg border-t-2 border-amber-500 text-center">
+                                        <div className="text-xs text-gray-400 mb-1">Beta (β) / P(Type II)</div>
+                                        <div className="text-xl font-mono font-bold text-amber-400">
+                                            {normalCDF((powerState.mu0 + inverseNormalCDF(1 - powerState.alpha) * (powerState.sigma / Math.sqrt(powerState.n)) - powerState.muA) / (powerState.sigma / Math.sqrt(powerState.n))).toFixed(3)}
+                                        </div>
+                                    </div>
+                                    <div className="bg-gray-800 p-3 rounded-lg border-t-2 border-emerald-500 text-center col-span-2">
+                                        <div className="text-xs text-gray-400 mb-1">Statistical Power (1 - β)</div>
+                                        <div className="text-2xl font-mono font-bold text-emerald-400">
+                                            {(1 - normalCDF((powerState.mu0 + inverseNormalCDF(1 - powerState.alpha) * (powerState.sigma / Math.sqrt(powerState.n)) - powerState.muA) / (powerState.sigma / Math.sqrt(powerState.n)))).toFixed(3)}
+                                            <span className="text-sm ml-2 text-gray-500">({((1 - normalCDF((powerState.mu0 + inverseNormalCDF(1 - powerState.alpha) * (powerState.sigma / Math.sqrt(powerState.n)) - powerState.muA) / (powerState.sigma / Math.sqrt(powerState.n)))) * 100).toFixed(1)}%)</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="lg:col-span-4 space-y-6">
+                            <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl">
+                                <h2 className="text-xl font-bold text-indigo-400 mb-4 border-b border-gray-800 pb-2">Experimental Design</h2>
+                                <div className="space-y-6">
+                                    <div className="bg-gray-800 p-4 rounded-lg">
+                                        <label className="text-sm text-indigo-300 font-bold flex justify-between mb-2">
+                                            <span>True Effect Size (μₐ)</span> <span>{powerState.muA}</span>
+                                        </label>
+                                        <p className="text-[10px] text-gray-500 mb-2">Distance from Null (μ₀ = 100). Larger effect = higher power.</p>
+                                        <input type="range" min="100" max="130" step="1" value={powerState.muA} onChange={e => setPowerState({...powerState, muA: parseFloat(e.target.value)})} className="w-full accent-indigo-500" />
+                                    </div>
+
+                                    <div className="bg-gray-800 p-4 rounded-lg">
+                                        <label className="text-sm text-cyan-300 font-bold flex justify-between mb-2">
+                                            <span>Sample Size (n)</span> <span>{powerState.n}</span>
+                                        </label>
+                                        <p className="text-[10px] text-gray-500 mb-2">More samples narrow the curves, reducing overlap.</p>
+                                        <input type="range" min="5" max="200" step="5" value={powerState.n} onChange={e => setPowerState({...powerState, n: parseInt(e.target.value)})} className="w-full accent-cyan-500" />
+                                    </div>
+
+                                    <div className="bg-gray-800 p-4 rounded-lg">
+                                        <label className="text-sm text-gray-300 font-bold flex justify-between mb-2">
+                                            <span>Pop. Std Deviation (σ)</span> <span>{powerState.sigma}</span>
+                                        </label>
+                                        <p className="text-[10px] text-gray-500 mb-2">More noise (variance) increases overlap and reduces power.</p>
+                                        <input type="range" min="5" max="40" step="1" value={powerState.sigma} onChange={e => setPowerState({...powerState, sigma: parseFloat(e.target.value)})} className="w-full accent-gray-400" />
+                                    </div>
+
+                                    <div className="bg-gray-800 p-4 rounded-lg border border-red-900/50">
+                                        <label className="text-sm text-red-400 font-bold flex justify-between mb-2">
+                                            <span>Significance Level (α)</span> <span>{powerState.alpha.toFixed(3)}</span>
+                                        </label>
+                                        <p className="text-[10px] text-gray-500 mb-2">Lowering alpha makes it harder to reject H₀, thus lowering power.</p>
+                                        <input type="range" min="0.001" max="0.200" step="0.001" value={powerState.alpha} onChange={e => setPowerState({...powerState, alpha: parseFloat(e.target.value)})} className="w-full accent-red-500" />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* --- TAB: INFERENCE --- */}
                 {activeTab === 'inference' && (
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                     <div className="lg:col-span-7 space-y-6">
@@ -885,14 +1895,11 @@
                                   <input type="number" min="2" max="1000" value={samp.size} onChange={e => setInferenceSamples(inferenceSamples.map(s => s.id === samp.id ? {...s, size: parseInt(e.target.value)||2} : s))} className="w-16 bg-gray-900 text-white p-1 rounded text-center text-xs" />
                                 </div>
                                 <select value={samp.type} onChange={e => updateSampleType(samp.id, e.target.value)} className="w-full bg-gray-900 text-gray-300 text-xs rounded p-1 mb-2">
-                                  <option value="normal">Normal (μ, σ)</option><option value="uniform">Uniform (a, b)</option><option value="exponential">Exponential (λ)</option><option value="poisson">Poisson (λ)</option><option value="binomial">Binomial (n, p)</option>
+                                  <optgroup label="Continuous"><option value="normal">Normal</option><option value="uniform">Uniform</option><option value="exponential">Exponential</option></optgroup>
+                                  <optgroup label="Discrete"><option value="binomial">Binomial</option><option value="poisson">Poisson</option></optgroup>
                                 </select>
                                 <div className="grid grid-cols-2 gap-2 text-xs">
-                                  {samp.type === 'normal' && (<><label className="flex flex-col text-gray-400">μ <input type="number" value={samp.params.mu} onChange={e => updateSampleParam(samp.id, 'mu', e.target.value)} className="bg-gray-900 p-1 rounded mt-1 text-white" /></label><label className="flex flex-col text-gray-400">σ <input type="number" min="0.1" value={samp.params.sigma} onChange={e => updateSampleParam(samp.id, 'sigma', e.target.value)} className="bg-gray-900 p-1 rounded mt-1 text-white" /></label></>)}
-                                  {samp.type === 'uniform' && (<><label className="flex flex-col text-gray-400">Min <input type="number" value={samp.params.a} onChange={e => updateSampleParam(samp.id, 'a', e.target.value)} className="bg-gray-900 p-1 rounded mt-1 text-white" /></label><label className="flex flex-col text-gray-400">Max <input type="number" value={samp.params.b} onChange={e => updateSampleParam(samp.id, 'b', e.target.value)} className="bg-gray-900 p-1 rounded mt-1 text-white" /></label></>)}
-                                  {samp.type === 'exponential' && (<label className="flex flex-col text-gray-400 col-span-2">Rate λ <input type="number" step="0.1" value={samp.params.lambda} onChange={e => updateSampleParam(samp.id, 'lambda', e.target.value)} className="bg-gray-900 p-1 rounded mt-1 text-white" /></label>)}
-                                  {samp.type === 'poisson' && (<label className="flex flex-col text-gray-400 col-span-2">Lambda λ <input type="number" value={samp.params.lambda} onChange={e => updateSampleParam(samp.id, 'lambda', e.target.value)} className="bg-gray-900 p-1 rounded mt-1 text-white" /></label>)}
-                                  {samp.type === 'binomial' && (<><label className="flex flex-col text-gray-400">Trials n <input type="number" value={samp.params.n} onChange={e => updateSampleParam(samp.id, 'n', e.target.value)} className="bg-gray-900 p-1 rounded mt-1 text-white" /></label><label className="flex flex-col text-gray-400">Prob p <input type="number" step="0.05" value={samp.params.p} onChange={e => updateSampleParam(samp.id, 'p', e.target.value)} className="bg-gray-900 p-1 rounded mt-1 text-white" /></label></>)}
+                                  {renderParams(samp, (name, val) => updateSampleParam(samp.id, name, val))}
                                 </div>
                               </div>
                             ))}
@@ -903,7 +1910,7 @@
                   </div>
                 )}
 
-                {/* --- TAB 3: BAYESIAN --- */}
+                {/* --- TAB: BAYESIAN --- */}
                 {activeTab === 'bayesian' && (
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     <div className="lg:col-span-2 space-y-4">
@@ -998,7 +2005,7 @@
                   </div>
                 )}
                 
-                <EquationsTable distsToRender={activeTab === 'bayesian' ? bayesianAnalysis.curves : distributions} />
+                {(activeTab === 'explorer' || activeTab === 'bayesian') && <EquationsTable distsToRender={activeTab === 'bayesian' ? bayesianAnalysis.curves : distributions} />}
               </div>
             </div>
           );
